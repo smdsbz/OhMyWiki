@@ -3,6 +3,7 @@ import { Logger } from '../common/Logger';
 import { WikiNode } from '../model/WikiTypes';
 import { TemplateEngine, TemplateContext } from '../wiki/template/TemplateEngine';
 import { ModuleHost } from '../wiki/module/ModuleHost';
+import { SmwQueryEngine } from '../wiki/smw/SmwQueryEngine';
 import { WikitextParser } from '../wiki/parser/WikitextParser';
 import { WikiContentView } from '../wiki/render/WikiContentView';
 
@@ -86,13 +87,16 @@ export struct Reader {
         pageTitle: title,
         index: index,
         invokeHandler: new ModuleHost(),
+        askHandler: SmwQueryEngine.get(),
       };
       const engine = new TemplateEngine(ctx);
       const expanded = await engine.expand(raw);
+      Logger.info(TAG, 'EXPANDED [' + title + ']:\n' + expanded);
       const finalText = await this.appendShopLocation(expanded, raw);
       const parser = new WikitextParser(index, title);
       const nodes = parser.parse(finalText);
       Logger.info(TAG, 'loadPage [' + title + '] nodes=' + nodes.length);
+      Logger.info(TAG, 'NODES [' + title + ']: ' + JSON.stringify(nodes).substring(0, 3000));
       this.pageTitle = title;
       this.nodes = nodes;
       this.loading = false;

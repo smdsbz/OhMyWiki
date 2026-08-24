@@ -9,11 +9,20 @@ export interface InvokeHandler {
   invoke(module: string, func: string, args: string[], ctx: TemplateContext): Promise<string>;
 }
 
+/** #ask/#show 语义查询分发接口（由 SmwQueryEngine 实现） */
+export interface AskHandler {
+  query(args: string[], ctx: TemplateContext): Promise<string>;
+}
+
 /** 模板展开上下文 */
 export interface TemplateContext {
   pageTitle: string;
   index: WikiIndex | null;
   invokeHandler: InvokeHandler | null;
+  /** SMW 语义查询处理器（可选，缺省时 #ask 显示占位） */
+  askHandler?: AskHandler | null;
+  /** 语义属性捕获回调（可选，用于构建属性索引） */
+  capture?: (prop: string, value: string) => void;
 }
 
 const MAX_DEPTH = 10;
@@ -81,14 +90,21 @@ export class TemplateEngine {
           continue;
         }
         const inner = text.substring(i + 2, end - 2);
-        const dc = this.findTopLevelDoubleColon(inner);
+        // 展开链接内的模板（如 [[{{FULLPAGENAME}}/子页|显示]]）
+        const expandedInner = await this.expandInner(inner, depth + 1, stack);
+        const dc = this.findTopLevelDoubleColon(expandedInner);
         if (dc >= 0) {
-          // SMW [[属性::值]] → 只保留值
-          sb.push(inner.substring(dc + 2));
+          // SMW [[属性::值]] → 捕获属性，只保留值
+          const prop = expandedInner.substring(0, dc).trim();
+          const value = expandedInner.substring(dc + 2).trim();
+          if (this.ctx.capture !== undefined && this.ctx.capture !== null) {
+            this.ctx.capture(prop, value);
+          }
+          sb.push(value);
           i = end;
           continue;
         }
-        sb.push(text.substring(i, end));
+        sb.push('[[' + expandedInner + ']]');
         i = end;
         continue;
       }
@@ -99,20 +115,77 @@ export class TemplateEngine {
   }
 
   private async expandOne(inner: string, depth: number, stack: string[]): Promise<string> {
-    // 找名称结束位置（顶层 ':' 或 '|'）
+    // Special 页面（名称含 ':'，需特殊处理分隔符）
+    const trimmed = inner.trim();
+    if (trimmed.startsWith('Special:PrefixIndex/')) {
+      let sep = -1;
+      let i = 0;
+      const tn = trimmed.length;
+      while (i < tn) {
+        const c = trimmed.charAt(i);
+        if (c === '{' && i + 1 < tn && trimmed.charAt(i + 1) === '{') {
+          const e = BraceUtil.findTemplateClose(trimmed, i);
+          if (e < 0) {
+            break;
+          }
+          i = e;
+          continue;
+        }
+        if (c === '[' && i + 1 < tn && trimmed.charAt(i + 1) === '[') {
+          const e = BraceUtil.findBracketClose(trimmed, i);
+          if (e < 0) {
+            break;
+          }
+          i = e;
+          continue;
+        }
+        if (c === '|') {
+          sep = i;
+          break;
+        }
+        i++;
+      }
+      let name = sep >= 0 ? trimmed.substring(0, sep) : trimmed;
+      const rest = sep >= 0 ? trimmed.substring(sep + 1) : '';
+      if (name.indexOf('{{') >= 0) {
+        name = (await this.expandInner(name, depth + 1, stack)).trim();
+      }
+      return await this.specialPrefixIndex(name, rest);
+    }
+    // 找名称结束位置（顶层 ':' 或 '|'，跳过嵌套 {{ }} / [[ ]]）
     let nameEnd = -1;
-    for (let i = 0; i < inner.length; i++) {
+    let i = 0;
+    const n = inner.length;
+    while (i < n) {
       const c = inner.charAt(i);
+      if (c === '{' && i + 1 < n && inner.charAt(i + 1) === '{') {
+        const e = BraceUtil.findTemplateClose(inner, i);
+        if (e < 0) {
+          break;
+        }
+        i = e;
+        continue;
+      }
+      if (c === '[' && i + 1 < n && inner.charAt(i + 1) === '[') {
+        const e = BraceUtil.findBracketClose(inner, i);
+        if (e < 0) {
+          break;
+        }
+        i = e;
+        continue;
+      }
       if (c === ':' || c === '|') {
         nameEnd = i;
         break;
       }
-      if (c === '{' || c === '[') {
-        break;
-      }
+      i++;
     }
-    const name = (nameEnd >= 0 ? inner.substring(0, nameEnd) : inner).trim();
+    let name = (nameEnd >= 0 ? inner.substring(0, nameEnd) : inner).trim();
     const rest = nameEnd >= 0 ? inner.substring(nameEnd + 1) : '';
+    // 展开名称中的嵌套模板（如 {{Special:PrefixIndex/{{FULLPAGENAME}}/ ...}}）
+    if (name.indexOf('{{') >= 0) {
+      name = (await this.expandInner(name, depth + 1, stack)).trim();
+    }
     if (name.length === 0) {
       return '';
     }
@@ -143,8 +216,39 @@ export class TemplateEngine {
     if (magic !== null) {
       return magic;
     }
+    // Special 页面
+    if (name.startsWith('Special:PrefixIndex/')) {
+      return await this.specialPrefixIndex(name, rest);
+    }
     // 普通模板
     return await this.expandTemplate(name, rest, depth, stack);
+  }
+
+  /** {{Special:PrefixIndex/<前缀>|...}}：列出指定前缀的子页面 */
+  private async specialPrefixIndex(name: string, rest: string): Promise<string> {
+    const prefix = name.substring('Special:PrefixIndex/'.length);
+    const args = BraceUtil.splitTopLevel(rest, '|');
+    let stripPrefix = false;
+    for (const a of args) {
+      const eq = this.topLevelIndexOf(a, '=');
+      if (eq > 0) {
+        const key = a.substring(0, eq).trim().toLowerCase();
+        const val = a.substring(eq + 1).trim();
+        if (key === 'stripprefix' && val === '1') {
+          stripPrefix = true;
+        }
+      }
+    }
+    if (this.ctx.index === null) {
+      return '';
+    }
+    const titles = this.ctx.index.titlesByPrefix(prefix);
+    const sb: string[] = [];
+    for (const t of titles) {
+      const display = stripPrefix && t.length > prefix.length ? t.substring(prefix.length) : t;
+      sb.push('* [[' + t + '|' + display + ']]');
+    }
+    return sb.join('\n');
   }
 
   private async parserFunction(name: string, rest: string, depth: number, stack: string[]): Promise<string> {
@@ -217,9 +321,24 @@ export class TemplateEngine {
       return this.placeholder('Lua 模块 ' + module + ' 未实现');
     }
     if (fname === '#ask' || fname === '#show') {
+      if (this.ctx.askHandler !== undefined && this.ctx.askHandler !== null) {
+        return await this.ctx.askHandler.query(args, this.ctx);
+      }
       return this.placeholder('SMW 语义查询离线版暂不支持');
     }
     if (fname === '#set' || fname === '#subobject' || fname === '#set_internal' || fname === '#declare') {
+      if (fname === '#set' && this.ctx.capture !== undefined && this.ctx.capture !== null) {
+        for (const a of args) {
+          const eq = this.topLevelIndexOf(a, '=');
+          if (eq > 0) {
+            const prop = a.substring(0, eq).trim();
+            const value = a.substring(eq + 1).trim();
+            if (prop.length > 0) {
+              this.ctx.capture(prop, value);
+            }
+          }
+        }
+      }
       return '';
     }
     if (fname === '#related' || fname === '#categorytree' || fname === '#dpl' || fname === '#language') {

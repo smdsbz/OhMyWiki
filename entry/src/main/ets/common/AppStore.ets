@@ -8,6 +8,7 @@ import { ShopFinder } from '../data/ShopFinder';
 import { ZipExtractor, ProgressCallback } from '../data/ZipExtractor';
 import { WikiSite } from '../model/WikiTypes';
 import { DataSource } from '../data/DataSource';
+import { SmwQueryEngine } from '../wiki/smw/SmwQueryEngine';
 
 const TAG = 'AppStore';
 
@@ -163,6 +164,11 @@ export class AppStore {
     return AppStore.activeIndex;
   }
 
+  /** 获取 SMW 语义查询引擎（单例，站点切换时清空属性缓存） */
+  static getSmwQueryEngine(): SmwQueryEngine {
+    return SmwQueryEngine.get();
+  }
+
   /** 获取当前站点的商店索引（懒构建 + 缓存，站点切换时重建） */
   static getShopFinder(): ShopFinder | null {
     if (AppStore.activeIndex === null || AppStore.activeSite === null) {
@@ -216,6 +222,8 @@ export class AppStore {
     AppStore.shopFinder = null;
     AppStore.shopFinderKey = '';
     AppStore.getShopFinder();
+    // 站点切换：清空 SMW 属性缓存
+    SmwQueryEngine.get().clear();
     Logger.info(TAG, 'opened site: ' + site.name + ' (' + idx.pageCount() + ' pages)');
     return true;
   }

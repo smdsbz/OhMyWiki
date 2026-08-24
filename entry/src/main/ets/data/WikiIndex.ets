@@ -29,6 +29,7 @@ export class WikiIndex {
   private titleToPath: Map<string, string> = new Map();
   private imageSet: Set<string> = new Set();
   private imageNormMap: Map<string, string> = new Map();
+  private templateCache: Map<string, string | null> = new Map();
   private loaded: boolean = false;
 
   constructor(source: DataSource, rootRel: string) {
@@ -211,9 +212,15 @@ export class WikiIndex {
     }
   }
 
-  /** 读取模板页源码（模板命名空间） */
+  /** 读取模板页源码（模板命名空间，带缓存） */
   async readTemplate(name: string): Promise<string | null> {
-    return this.readPage('模板:' + name);
+    const cached = this.templateCache.get(name);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const text = await this.readPage('模板:' + name);
+    this.templateCache.set(name, text);
+    return text;
   }
 
   /** 读取 JSON 命名空间数据页 */

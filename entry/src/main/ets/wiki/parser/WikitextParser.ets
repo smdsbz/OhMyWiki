@@ -45,6 +45,32 @@ export class WikitextParser {
     return line.trim().length === 0;
   }
 
+  /** 检查文本是否有未闭合的 [[ 或 {{（跨行链接/模板） */
+  private hasUnclosedBrackets(text: string): boolean {
+    let i = 0;
+    const n = text.length;
+    while (i < n - 1) {
+      if (text.charAt(i) === '[' && text.charAt(i + 1) === '[') {
+        const end = BraceUtil.findBracketClose(text, i);
+        if (end < 0) {
+          return true;
+        }
+        i = end;
+        continue;
+      }
+      if (text.charAt(i) === '{' && text.charAt(i + 1) === '{') {
+        const end = BraceUtil.findTemplateClose(text, i);
+        if (end < 0) {
+          return true;
+        }
+        i = end;
+        continue;
+      }
+      i++;
+    }
+    return false;
+  }
+
   private isListLine(line: string): boolean {
     const t = line.replace(/^\s*/, '');
     return t.length > 0 && (t.charAt(0) === '*' || t.charAt(0) === '#' || t.charAt(0) === ';' || t.charAt(0) === ':');
@@ -238,6 +264,19 @@ export class WikitextParser {
         }
       }
       const content = sawNonMarker ? t.substring(pos) : '';
+      // 合并未闭合的 [[ / {{ 到后续行（如 [[NPC:米米\n|米米\n]]），直到括号闭合
+      let mergedContent = content;
+      while (this.hasUnclosedBrackets(mergedContent) && i + 1 < end) {
+        const nextLine = lines[i + 1];
+        const nt = nextLine.replace(/^\s+/, '');
+        // 不合并以列表标记开头的行（那是新的列表项）
+        if (nt.length > 0 && (nt.charAt(0) === '*' || nt.charAt(0) === '#' ||
+          nt.charAt(0) === ';' || nt.charAt(0) === ':')) {
+          break;
+        }
+        i++;
+        mergedContent += '\n' + nextLine;
+      }
       // 将 ';term:def' / ':x' 转为带缩进的条目
       const isTerm = t.charAt(0) === ';';
       const isIndent = t.charAt(0) === ':';
@@ -250,7 +289,7 @@ export class WikitextParser {
       closeTo(types.length);
 
       const listFrame = stack[stack.length - 1];
-      let inlineText = content;
+      let inlineText = mergedContent;
       let boldTerm: WikiNode[] | null = null;
       if (isTerm) {
         const colonIdx = this.topLevelIndexOf(content, ':');
@@ -468,7 +507,19 @@ export class WikitextParser {
         i++;
         continue;
       }
-      // 其他行：若是单元格内容的延续（以 '|' 或 '!' 开头之外），忽略
+      // 其他行：若是单元格内容的延续（以 '|' 或 '!' 开头之外），追加到最后一个单元格
+      if (currentRow !== null && (currentRow.children as WikiNode[]).length > 0) {
+        const cells = currentRow.children as WikiNode[];
+        const lastCell = cells[cells.length - 1];
+        const lastInline = lastCell.inline as WikiNode[];
+        const lastNode = lastInline.length > 0 ? lastInline[lastInline.length - 1] : null;
+        const contText = raw.trim();
+        if (lastNode !== null && lastNode.type === NodeType.Text) {
+          lastNode.text = (lastNode.text ?? '') + ' ' + contText;
+        } else {
+          lastInline.push({ type: NodeType.Text, text: contText });
+        }
+      }
       i++;
     }
 
