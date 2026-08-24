@@ -1,0 +1,56 @@
+{
+  app: {
+    signingConfigs: [
+      {
+        name: 'default',
+        type: 'HarmonyOS',
+        material: {
+          certpath: 'C:\\Users\\69406\\.ohos\\config\\default_OhMyWiki_npPG2EOuYGPOnWQVPQLP2TXCOe0UFLXFPsZ1SdmQ=.cer',
+          keyAlias: 'debugKey',
+          keyPassword: '0000001bddaff57e0325cea29f7126a404f82b60ec5aee285471d45e6cbd28e32e4b6436521bbc9189a7cd',
+          profile: 'C:\\Users\\69406\\.ohos\\config\\default_OhMyWiki_npPG2EOuYGPOnWQVPQLP2TXCOe0UFLXFPsZ1SdmQ=.p7b',
+          signAlg: 'SHA256withECDSA',
+          storeFile: 'C:\\Users\\69406\\.ohos\\config\\default_OhMyWiki_npPG2EOuYGPOnWQVPQLP2TXCOe0UFLXFPsZ1SdmQ=.p12',
+          storePassword: '0000001bddaff57e0325cea29f7126a404f82b60ec5aee285471d45e6cbd28e32e4b6436521bbc9189a7cd',
+        },
+      },
+    ],
+    products: [
+      {
+        name: 'default',
+        signingConfig: 'default',
+        targetSdkVersion: '6.1.1(24)',
+        compatibleSdkVersion: '6.1.1(24)',
+        runtimeOS: 'HarmonyOS',
+        buildOption: {
+          strictMode: {
+            caseSensitiveCheck: true,
+            useNormalizedOHMUrl: true,
+          },
+        },
+      },
+    ],
+    buildModeSet: [
+      {
+        name: 'debug',
+      },
+      {
+        name: 'release',
+      },
+    ],
+  },
+  modules: [
+    {
+      name: 'entry',
+      srcPath: './entry',
+      targets: [
+        {
+          name: 'default',
+          applyToProducts: [
+            'default',
+          ],
+        },
+      ],
+    },
+  ],
+}
