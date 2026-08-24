@@ -17,7 +17,7 @@ export interface ReaderParams {
 
 @Component
 export struct Reader {
-  @Prop siteKey: string = 'sandbox';
+  @Prop siteKey: string = 'public';
   @Prop siteName: string = '';
   @Prop startTitle: string = '首页';
   @State pageTitle: string = '';

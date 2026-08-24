@@ -8,7 +8,7 @@ export interface WikiSite {
   name: string;
   /** 显示名（优先使用 summary.json 的 site 字段） */
   displayName: string;
-  /** 数据源 key：'sandbox' | 'public' */
+  /** 数据源 key：'public' */
   sourceKey: string;
   /** 站点根目录相对路径（相对数据源根） */
   rootRel: string;

@@ -1,5 +1,5 @@
 import { common } from '@kit.AbilityKit';
-import { DownloadFileButton, DownloadIconStyle, DownloadDescription, DownloadLayoutDirection, promptAction } from '@kit.ArkUI';
+import { promptAction } from '@kit.ArkUI';
 import { picker } from '@kit.CoreFileKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { AppStore } from '../common/AppStore';
@@ -22,8 +22,8 @@ struct Index {
   @State sites: SiteItem[] = [];
   @State loading: boolean = true;
   @State errorMsg: string = '';
-  @State sandboxPath: string = '';
   @State publicPath: string = '';
+  @State publicDirReady: boolean = false;
   @State importing: boolean = false;
   @State importMsg: string = '';
   @State importProgress: number = 0;
@@ -33,7 +33,6 @@ struct Index {
     const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
     AppStore.init(ctx);
     Prefs.init(ctx);
-    this.sandboxPath = AppStore.getSandboxPath();
     this.publicPath = AppStore.getPublicDisplayPath();
     this.refresh();
   }
@@ -42,7 +41,7 @@ struct Index {
     this.loading = true;
     this.errorMsg = '';
     try {
-      await AppStore.ensurePublicDir();
+      this.publicDirReady = await AppStore.ensurePublicDir();
       this.publicPath = AppStore.getPublicDisplayPath();
       const list = await AppStore.discoverSites();
       const items: SiteItem[] = [];
@@ -59,7 +58,7 @@ struct Index {
   }
 
   /** 点击下载按钮（安全控件），通过 DOWNLOAD 模式保存获取公共下载目录持久化授权 */
-  async setupPublicDir(): Promise<void> {
+  async grantPublicDirAccess(): Promise<void> {
     try {
       const options = new picker.DocumentSaveOptions();
       options.pickerMode = picker.DocumentPickerMode.DOWNLOAD;
@@ -74,7 +73,7 @@ struct Index {
       }
     } catch (e) {
       const err = e as BusinessError;
-      Logger.error(TAG, 'setupPublicDir error: ' + JSON.stringify(err));
+      Logger.error(TAG, 'grantPublicDirAccess error: ' + JSON.stringify(err));
       this.errorMsg = '启用公共下载目录失败：' + JSON.stringify(err);
     }
   }
@@ -121,7 +120,11 @@ struct Index {
       Logger.error(TAG, 'importWikiZip catch: ' + JSON.stringify(err));
       this.importing = false;
       this.importMsg = '';
-      promptAction.showToast({ message: '导入失败：' + JSON.stringify(err), duration: 3000 });
+      try {
+        promptAction.showToast({ message: '导入失败：' + JSON.stringify(err), duration: 3000 });
+      } catch (e2) {
+        Logger.error(TAG, 'showToast failed: ' + JSON.stringify(e2));
+      }
     }
     Logger.info(TAG, 'importWikiZip: importing=false');
   }
@@ -139,8 +142,8 @@ struct Index {
     this.pathStack.pushPathByName('Reader', params);
   }
 
-  sourceBadgeText(key: string): string {
-    return key === 'public' ? '公共下载' : '沙箱';
+  sourceBadgeText(): string {
+    return '公共下载';
   }
 
   build() {
@@ -290,7 +293,7 @@ struct Index {
         .alignItems(HorizontalAlign.Start)
         .layoutWeight(1)
 
-        Text(this.sourceBadgeText(item.site.sourceKey))
+        Text(this.sourceBadgeText())
           .fontSize(11)
           .fontColor('#2f6fed')
           .padding({ left: 8, right: 8, top: 3, bottom: 3 })
@@ -333,72 +336,42 @@ struct Index {
         .fontColor('#1c1c1e')
         .margin({ top: 32 })
 
-      Text('把 wiki 数据文件夹放进公共下载目录或应用沙箱，每个顶层文件夹即一个 MediaWiki 站点（含 pages/ 与 images/）。')
+      Text('把 wiki 数据文件夹放进公共下载目录，每个顶层文件夹即一个 MediaWiki 站点（含 pages/ 与 images/）。')
         .fontSize(14)
         .fontColor('#3a3a3c')
-        .textAlign(TextAlign.Center)
+        .textAlign(TextAlign.Start)
         .lineHeight(22)
         .padding({ left: 24, right: 24 })
 
-      this.GuideBlock('方式一：公共下载目录（推荐）',
-        '1. 点击下方按钮启用本应用的公共下载目录（仅首次需要，点击后系统自动完成）。\n' +
-        '2. 在手机「文件管理」中进入：我的手机 → ' + this.publicPath + '\n' +
-        '3. 把 wiki 数据文件夹（如 rakuen-database）整体复制/移动到该目录下。\n' +
+      // 授权提示：与使用方式正交，仅未授权时显示
+      if (!this.publicDirReady) {
+        this.GuideBlock('需要授权',
+          '本应用需要访问公共下载目录才能读取或导入 wiki 数据。\n' +
+          '点击下方按钮授权（仅首次需要，授权后自动生效）。')
+
+        Button('授权访问公共下载目录')
+          .height(48)
+          .fontSize(16)
+          .fontColor('#ffffff')
+          .backgroundColor('#2f6fed')
+          .borderRadius(24)
+          .padding({ left: 24, right: 24 })
+          .onClick(() => {
+            this.grantPublicDirAccess();
+          })
+      }
+
+      // 使用方式：始终显示
+      this.GuideBlock('方式一：公共下载目录',
+        '1. 在手机「文件管理」中进入：我的手机 → ' + this.publicPath + '\n' +
+        '2. 把 wiki 数据文件夹（如 rakuen-database）整体复制/移动到该目录下。\n' +
         '   提示：如果你已在 Download 根目录放了 rakuen-database，把它移进上面的文件夹即可。\n' +
-        '4. 回到本应用点「重新扫描」。')
+        '3. 回到本应用点右上角「刷新」。')
 
-      DownloadFileButton({
-        contentOptions: {
-          icon: DownloadIconStyle.FULL_FILLED,
-          text: DownloadDescription.SAVE_FILE
-        },
-        styleOptions: {
-          fontSize: '15vp',
-          layoutDirection: DownloadLayoutDirection.HORIZONTAL,
-          fontColor: '#ffffff',
-          iconColor: '#ffffff',
-          textIconSpace: '6vp'
-        }
-      })
-        .height(42)
-        .backgroundColor('#2f6fed')
-        .borderRadius(21)
-        .onClick(() => {
-          this.setupPublicDir();
-        })
-
-      this.GuideBlock('方式二：应用沙箱',
-        '1. 在 DevEco Studio 的 Device File Browser 打开本应用的「应用沙箱」视图。\n' +
-        '2. 把 rakuen-database 文件夹整体复制到沙箱的 files 或 files/Download 目录下。\n' +
-        '   参考路径：' + this.sandboxPath + '\n' +
-        '3. 复制后点「重新扫描」。')
-
-      this.GuideBlock('方式三：导入 Wiki 压缩包（推荐，无需手动复制）',
-        '1. 点击下方「选择压缩包」按钮。\n' +
+      this.GuideBlock('方式二：导入 Wiki 压缩包',
+        '1. 点击右上角「导入」按钮。\n' +
         '2. 在文件选择器中选择 wiki 数据压缩包（如 rakuen-database.zip）。\n' +
-        '3. 应用会自动解压到沙箱目录并扫描站点。')
-
-      Button('选择压缩包并导入')
-        .height(42)
-        .fontSize(15)
-        .fontColor('#ffffff')
-        .backgroundColor('#2f6fed')
-        .borderRadius(21)
-        .width('100%')
-        .margin({ top: 4 })
-        .onClick(() => {
-          this.importWikiZip();
-        })
-
-      Button('重新扫描')
-        .height(36)
-        .fontSize(13)
-        .fontColor('#2f6fed')
-        .backgroundColor('#e8f0fe')
-        .margin({ top: 6 })
-        .onClick(() => {
-          this.refresh();
-        })
+        '3. 应用会自动解压到公共下载目录并扫描站点。')
     }
     .width('100%')
     .padding({ left: 16, right: 16, bottom: 32 })

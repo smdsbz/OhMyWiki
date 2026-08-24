@@ -1,7 +1,7 @@
 import { common } from '@kit.AbilityKit';
 import { fileUri, fileIo } from '@kit.CoreFileKit';
 import { Logger } from './Logger';
-import { SandboxSource, PathUtil } from '../data/DataSource';
+import { PathUtil } from '../data/DataSource';
 import { PublicDirSource } from '../data/PublicDirSource';
 import { WikiIndex } from '../data/WikiIndex';
 import { ShopFinder } from '../data/ShopFinder';
@@ -13,7 +13,7 @@ const TAG = 'AppStore';
 
 /**
  * 全局应用状态：持有 UIAbilityContext、数据源、当前站点与索引。
- * 数据源 = 应用沙箱（files/Download 等）+ 公共下载目录（Download/...，探测用）。
+ * 数据源 = 公共下载目录（Download/...，探测用）。
  */
 export class AppStore {
   private static ctx: common.UIAbilityContext | null = null;
@@ -30,19 +30,8 @@ export class AppStore {
     }
     AppStore.ctx = context;
     AppStore.sources = [];
-    AppStore.sources.push(new SandboxSource(context));
     AppStore.sources.push(new PublicDirSource(context));
-    Logger.info(TAG, 'AppStore initialized (sandbox + public download)');
-  }
-
-  /** 沙箱数据根目录（供 UI 展示，方便用户定位复制位置） */
-  static getSandboxPath(): string {
-    for (const s of AppStore.sources) {
-      if (s.key === 'sandbox') {
-        return (s as SandboxSource).getBase();
-      }
-    }
-    return '';
+    Logger.info(TAG, 'AppStore initialized (public download)');
   }
 
   static getPublicSource(): PublicDirSource | null {
@@ -76,7 +65,7 @@ export class AppStore {
   }
 
   /** 导入 wiki 压缩包：解压到公共下载目录 Download/<包名>/<zip名>/（用户可见，与手动解压一致）。
-   *  不使用应用沙箱（私有目录用户不可见、无清理入口）。onProgress 报告解压进度。 */
+   *  onProgress 报告解压进度。 */
   static async importWikiZip(zipUri: string, onProgress?: ProgressCallback): Promise<string> {
     const pub = AppStore.getPublicSource();
     if (pub === null) {
