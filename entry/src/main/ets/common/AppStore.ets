@@ -9,6 +9,7 @@ import { ZipExtractor, ProgressCallback } from '../data/ZipExtractor';
 import { WikiSite } from '../model/WikiTypes';
 import { DataSource } from '../data/DataSource';
 import { SmwQueryEngine } from '../wiki/smw/SmwQueryEngine';
+import { JsonDataReader } from '../wiki/module/JsonDataReader';
 
 const TAG = 'AppStore';
 
@@ -222,8 +223,9 @@ export class AppStore {
     AppStore.shopFinder = null;
     AppStore.shopFinderKey = '';
     AppStore.getShopFinder();
-    // 站点切换：清空 SMW 属性缓存
+    // 站点切换：清空 SMW 属性缓存与 JSON 数据缓存
     SmwQueryEngine.get().clear();
+    JsonDataReader.clear();
     Logger.info(TAG, 'opened site: ' + site.name + ' (' + idx.pageCount() + ' pages)');
     return true;
   }

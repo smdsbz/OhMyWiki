@@ -1,5 +1,5 @@
 import { common } from '@kit.AbilityKit';
-import { fileIo, fileUri, ListFileOptions } from '@kit.CoreFileKit';
+import { fileIo, fileUri } from '@kit.CoreFileKit';
 import { buffer } from '@kit.ArkTS';
 import { Logger } from '../common/Logger';
 import { DataSource, PathUtil } from './DataSource';
@@ -51,8 +51,8 @@ export class PublicDirSource implements DataSource {
       return false;
     }
     try {
-      if (!fileIo.accessSync(this.rootPath)) {
-        fileIo.mkdirSync(this.rootPath);
+      if (!await fileIo.access(this.rootPath)) {
+        await fileIo.mkdir(this.rootPath);
         Logger.info(TAG, 'created public dir: ' + this.rootPath);
       }
       return true;
@@ -67,8 +67,7 @@ export class PublicDirSource implements DataSource {
       return false;
     }
     try {
-      fileIo.accessSync(this.rootPath);
-      return true;
+      return await fileIo.access(this.rootPath);
     } catch (e) {
       return false;
     }
@@ -77,10 +76,10 @@ export class PublicDirSource implements DataSource {
   async listSubDirs(rel: string): Promise<string[]> {
     const dirs: string[] = [];
     try {
-      const names: string[] = fileIo.listFileSync(PathUtil.join(this.rootPath, rel));
+      const names: string[] = await fileIo.listFile(PathUtil.join(this.rootPath, rel));
       for (const n of names) {
         try {
-          const st = fileIo.statSync(PathUtil.join(PathUtil.join(this.rootPath, rel), n));
+          const st = await fileIo.stat(PathUtil.join(PathUtil.join(this.rootPath, rel), n));
           if (st.isDirectory()) {
             dirs.push(n);
           }
@@ -96,7 +95,7 @@ export class PublicDirSource implements DataSource {
 
   async listAllFiles(rel: string): Promise<string[]> {
     const fullPath = PathUtil.join(this.rootPath, rel);
-    // 公共下载目录的 listFileSync recursion 不生效（权限限制），需手动递归
+    // 公共下载目录的 listFile recursion 不生效（权限限制），需手动递归
     const result: string[] = [];
     await PublicDirSource.collectFiles(fullPath, '', result);
     Logger.info(TAG, 'listAllFiles: ' + fullPath + ' -> ' + result.length + ' files');
@@ -104,12 +103,12 @@ export class PublicDirSource implements DataSource {
   }
 
   /** 手动递归收集文件（返回相对路径） */
-  private static collectFiles(dirPath: string, relPrefix: string, out: string[]): void {
+  private static async collectFiles(dirPath: string, relPrefix: string, out: string[]): Promise<void> {
     let names: string[];
     try {
-      names = fileIo.listFileSync(dirPath);
+      names = await fileIo.listFile(dirPath);
     } catch (e) {
-      Logger.warn(TAG, 'collectFiles: listFileSync failed: ' + dirPath + ' ' + JSON.stringify(e));
+      Logger.warn(TAG, 'collectFiles: listFile failed: ' + dirPath + ' ' + JSON.stringify(e));
       return;
     }
     Logger.info(TAG, 'collectFiles: ' + dirPath + ' -> ' + names.length + ' items');
@@ -117,14 +116,14 @@ export class PublicDirSource implements DataSource {
       const childPath = PathUtil.join(dirPath, n);
       const childRel = relPrefix.length > 0 ? relPrefix + '/' + n : n;
       try {
-        const st = fileIo.statSync(childPath);
+        const st = await fileIo.stat(childPath);
         if (st.isDirectory()) {
-          PublicDirSource.collectFiles(childPath, childRel, out);
+          await PublicDirSource.collectFiles(childPath, childRel, out);
         } else {
           out.push(childRel);
         }
       } catch (e) {
-        Logger.warn(TAG, 'collectFiles: statSync failed: ' + childPath + ' ' + JSON.stringify(e));
+        Logger.warn(TAG, 'collectFiles: stat failed: ' + childPath + ' ' + JSON.stringify(e));
       }
     }
   }
@@ -145,21 +144,28 @@ export class PublicDirSource implements DataSource {
 
   async readBinary(rel: string): Promise<Uint8Array> {
     const fullPath = PathUtil.join(this.rootPath, rel);
-    const file = fileIo.openSync(fullPath, fileIo.OpenMode.READ_ONLY);
+    const file = await fileIo.open(fullPath, fileIo.OpenMode.READ_ONLY);
     try {
-      const st = fileIo.statSync(file.fd);
+      const st = await fileIo.stat(file.fd);
       const buf = new ArrayBuffer(st.size);
-      fileIo.readSync(file.fd, buf);
-      return new Uint8Array(buf);
+      const bytes = new Uint8Array(buf);
+      let total = 0;
+      while (total < st.size) {
+        const n = await fileIo.read(file.fd, buf, { offset: total });
+        if (n <= 0) {
+          break;
+        }
+        total += n;
+      }
+      return bytes;
     } finally {
-      fileIo.closeSync(file);
+      await fileIo.close(file);
     }
   }
 
   async exists(rel: string): Promise<boolean> {
     try {
-      fileIo.accessSync(PathUtil.join(this.rootPath, rel));
-      return true;
+      return await fileIo.access(PathUtil.join(this.rootPath, rel));
     } catch (e) {
       return false;
     }
@@ -167,7 +173,7 @@ export class PublicDirSource implements DataSource {
 
   async isDir(rel: string): Promise<boolean> {
     try {
-      return fileIo.statSync(PathUtil.join(this.rootPath, rel)).isDirectory();
+      return (await fileIo.stat(PathUtil.join(this.rootPath, rel))).isDirectory();
     } catch (e) {
       return false;
     }
@@ -175,7 +181,7 @@ export class PublicDirSource implements DataSource {
 
   async statSize(rel: string): Promise<number> {
     try {
-      return fileIo.statSync(PathUtil.join(this.rootPath, rel)).size;
+      return (await fileIo.stat(PathUtil.join(this.rootPath, rel))).size;
     } catch (e) {
       return 0;
     }

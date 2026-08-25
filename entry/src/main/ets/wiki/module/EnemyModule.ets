@@ -140,6 +140,10 @@ export class EnemyModule {
 
       const reactions = EnemyModule.calcReactions(param !== null ? param.IvdFiCombo : 0, param !== null ? param.RstFiCombo : 0);
 
+      // 捕获 SMW 语义属性（对应 Module:Enemy 的 mw.smw.set），供 #ask 查询过滤/排序
+      await EnemyModule.captureSmw(ctx, arrange, category, param, rsc, hp, str, ether, dex, agi, luck,
+        exp, gold, wp, sp, reactions);
+
       const sb: string[] = [];
       // 基本信息（转置）
       const lvFloat = (arrange.LvRand ?? 0) > 0 ? ' (' + arrange.LvRand + ')' : '';
@@ -185,6 +189,57 @@ export class EnemyModule {
       Logger.warn(TAG, 'renderMain error: ' + JSON.stringify(e));
       return '';
     }
+  }
+
+  /**
+   * 捕获 SMW 语义属性（对应 Module:Enemy 的 mw.smw.set），供 #ask 查询过滤/排序。
+   * 仅在 ctx.capture 存在时生效（SmwQueryEngine 提取属性时传入）。
+   */
+  private static async captureSmw(ctx: TemplateContext, arrange: EnArrangeJson, category: string,
+    param: EnParamJson | null, rsc: RscEnJson | null, hp: number, str: number, ether: number,
+    dex: number, agi: number, luck: number, exp: number, gold: number, wp: number, sp: number,
+    reactions: string[]): Promise<void> {
+    const capt = ctx.capture;
+    if (capt === undefined || capt === null) {
+      return;
+    }
+    const set = (prop: string, value: string): void => {
+      if (value.length > 0) {
+        capt(prop, value);
+      }
+    };
+    set('ZoneID', String(arrange.ZoneID));
+    set('敌人分类', category);
+    if (arrange.ZoneID > 0) {
+      const fl = await JsonDataReader.read(ctx, 'FLD_maplist/' + arrange.ZoneID) as Record<string, Object> | null;
+      if (fl !== null && fl.nameID !== undefined) {
+        set('地域', String(fl.nameID));
+      }
+    }
+    set('等级', String(arrange.Lv));
+    set('等级浮动', String(arrange.LvRand ?? 0));
+    set('无视等级差补正', arrange.IgnoreLevPow ? '✔' : '✘');
+    set('种族', rsc?.TypeFamily ?? '');
+    set('EXP', String(exp));
+    set('Gold', String(gold));
+    set('WP', String(wp));
+    set('SP', String(sp));
+    set('HP', String(hp));
+    set('力量', String(str));
+    set('以太力', String(ether));
+    set('灵巧', String(dex));
+    set('敏捷', String(agi));
+    set('运气', String(luck));
+    set('物理抗性', String(param?.RstPower ?? 0) + '%');
+    set('以太抗性', String(param?.RstEther ?? 0) + '%');
+    set('暴击率', String(param?.CriticalRate ?? 0) + '%');
+    set('格挡率', String(param?.GuardRate ?? 0) + '%');
+    set('击退', reactions[0]);
+    set('吹飞', reactions[1]);
+    set('破防', reactions[2]);
+    set('倒地', reactions[3]);
+    set('浮空', reactions[4]);
+    set('猛击', reactions[5]);
   }
 
   private static async lookupId(ctx: TemplateContext, name: string): Promise<number> {

@@ -25,11 +25,11 @@ export type ProgressCallback = (doneCount: number, totalCount: number, fileName:
 export class ZipExtractor {
   /** 解压 zip 到目标目录，带进度回调 */
   static async extract(zipPath: string, destDir: string, onProgress: ProgressCallback): Promise<void> {
-    const file = fileIo.openSync(zipPath, fileIo.OpenMode.READ_ONLY);
+    const file = await fileIo.open(zipPath, fileIo.OpenMode.READ_ONLY);
     try {
-      const st = fileIo.statSync(file.fd);
+      const st = await fileIo.stat(file.fd);
       const fileSize = st.size;
-      const entries = ZipExtractor.parseCentralDirectory(file.fd, fileSize);
+      const entries = await ZipExtractor.parseCentralDirectory(file.fd, fileSize);
       let doneCount = 0;
       for (const e of entries) {
         try {
@@ -51,16 +51,16 @@ export class ZipExtractor {
       }
       Logger.info(TAG, 'extract done: ' + entries.length + ' entries, ' + doneCount + ' files');
     } finally {
-      fileIo.closeSync(file);
+      await fileIo.close(file);
     }
   }
 
   /** 解析 zip 中央目录（EOCD + Central Directory），返回全部条目 */
-  private static parseCentralDirectory(fd: number, fileSize: number): ZipEntry[] {
+  private static async parseCentralDirectory(fd: number, fileSize: number): Promise<ZipEntry[]> {
     // 读文件末尾（最多 64KB）找 EOCD 签名 0x06054b50
     const tailLen = Math.min(fileSize, 65536);
     const tail = new ArrayBuffer(tailLen);
-    fileIo.readSync(fd, tail, { offset: fileSize - tailLen });
+    await fileIo.read(fd, tail, { offset: fileSize - tailLen });
     const dv = new DataView(tail);
     let eocdPos = -1;
     for (let i = tailLen - 22; i >= 0; i--) {
@@ -77,7 +77,7 @@ export class ZipExtractor {
     const cdOffset = dv.getUint32(eocdPos + 16, true);
     // 读中央目录
     const cd = new ArrayBuffer(cdSize);
-    fileIo.readSync(fd, cd, { offset: cdOffset });
+    await fileIo.read(fd, cd, { offset: cdOffset });
     const cdv = new DataView(cd);
     const entries: ZipEntry[] = [];
     let pos = 0;
@@ -111,7 +111,7 @@ export class ZipExtractor {
   private static async extractEntry(fd: number, entry: ZipEntry, destDir: string): Promise<void> {
     // 读本地文件头，计算数据偏移
     const lh = new ArrayBuffer(30);
-    fileIo.readSync(fd, lh, { offset: entry.localHeaderOffset });
+    await fileIo.read(fd, lh, { offset: entry.localHeaderOffset });
     const lv = new DataView(lh);
     const nameLen = lv.getUint16(26, true);
     const extraLen = lv.getUint16(28, true);
@@ -121,22 +121,22 @@ export class ZipExtractor {
     const outPath = PathUtil.join(destDir, relPath);
     // 目录条目
     if (relPath.endsWith('/')) {
-      if (!fileIo.accessSync(outPath)) {
-        fileIo.mkdirSync(outPath, true);
+      if (!await fileIo.access(outPath)) {
+        await fileIo.mkdir(outPath, true);
       }
       return;
     }
-    // 确保父目录存在（mkdirSync 对已存在目录抛 13900015 File exists，需先检查）
+    // 确保父目录存在（mkdir 对已存在目录抛 13900015 File exists，需先检查）
     const idx = outPath.lastIndexOf('/');
     if (idx > 0) {
       const parent = outPath.substring(0, idx);
-      if (!fileIo.accessSync(parent)) {
-        fileIo.mkdirSync(parent, true);
+      if (!await fileIo.access(parent)) {
+        await fileIo.mkdir(parent, true);
       }
     }
     // 读压缩数据
     const comp = new ArrayBuffer(entry.compressedSize);
-    fileIo.readSync(fd, comp, { offset: dataOffset });
+    await fileIo.read(fd, comp, { offset: dataOffset });
     // 解压
     let data: ArrayBuffer;
     if (entry.method === 0) {
@@ -154,12 +154,12 @@ export class ZipExtractor {
     }
     // 写入目标文件（若 outPath 已被创建为目录，尝试递归删除；删除失败则跳过该文件，不中断整个解压）
     try {
-      const st = fileIo.statSync(outPath);
+      const st = await fileIo.stat(outPath);
       if (st.isDirectory()) {
-        ZipExtractor.removeDir(outPath);
+        await ZipExtractor.removeDir(outPath);
         // 删除后确认目录是否已移除；若仍存在（权限受限删不掉），跳过该文件
         try {
-          const st2 = fileIo.statSync(outPath);
+          const st2 = await fileIo.stat(outPath);
           if (st2.isDirectory()) {
             Logger.warn(TAG, 'skip file (dir not removable): ' + relPath);
             return;
@@ -169,35 +169,35 @@ export class ZipExtractor {
         }
       }
     } catch (e) {
-      // statSync 失败 = 文件不存在（正常），继续写入
+      // stat 失败 = 文件不存在（正常），继续写入
     }
-    const out = fileIo.openSync(outPath, fileIo.OpenMode.CREATE | fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.TRUNC);
+    const out = await fileIo.open(outPath, fileIo.OpenMode.CREATE | fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.TRUNC);
     try {
-      fileIo.writeSync(out.fd, data);
+      await fileIo.write(out.fd, data);
     } finally {
-      fileIo.closeSync(out);
+      await fileIo.close(out);
     }
   }
 
   /** 递归删除目录（含内容） */
-  private static removeDir(dir: string): void {
+  private static async removeDir(dir: string): Promise<void> {
     try {
-      const names: string[] = fileIo.listFileSync(dir);
+      const names: string[] = await fileIo.listFile(dir);
       for (const n of names) {
         const p = PathUtil.join(dir, n);
         try {
-          const st = fileIo.statSync(p);
+          const st = await fileIo.stat(p);
           if (st.isDirectory()) {
-            ZipExtractor.removeDir(p);
-            fileIo.rmdirSync(p);
+            await ZipExtractor.removeDir(p);
+            await fileIo.rmdir(p);
           } else {
-            fileIo.unlinkSync(p);
+            await fileIo.unlink(p);
           }
         } catch (e) {
           Logger.warn(TAG, 'removeDir item failed: ' + p + ' ' + JSON.stringify(e));
         }
       }
-      fileIo.rmdirSync(dir);
+      await fileIo.rmdir(dir);
     } catch (e) {
       Logger.warn(TAG, 'removeDir failed: ' + dir + ' ' + JSON.stringify(e));
     }
