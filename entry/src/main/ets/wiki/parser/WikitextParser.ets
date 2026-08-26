@@ -401,6 +401,8 @@ export class WikitextParser {
       }
     } else if (lower.startsWith('<gallery')) {
       return this.parseGallery(lines, start, end);
+    } else if (lower.startsWith('<ol') || lower.startsWith('<ul')) {
+      return this.parseHtmlList(lines, start, end);
     } else if (lower.startsWith('<imagemap')) {
       // 查找 </imagemap>
       let i = start;
@@ -436,6 +438,91 @@ export class WikitextParser {
       type: NodeType.Container,
       align: align.length > 0 ? align : undefined,
       children: this.parseBlocks(childLines, 0, childLines.length),
+    };
+    return { node: node, nextIndex: i };
+  }
+
+  /** 解析 HTML 列表 <ol>/<ul>：每个 <li>…</li> 一个列表项（支持跨行 li） */
+  private parseHtmlList(lines: string[], start: number, end: number): ParsedBlock {
+    const ordered = lines[start].replace(/^\s+/, '').toLowerCase().startsWith('<ol');
+    const items: WikiNode[] = [];
+    let i = start + 1;
+    let current: string[] = [];
+    let inItem = false;
+    let closed = false;
+    const flushItem = (): void => {
+      if (current.length > 0) {
+        items.push({
+          type: NodeType.ListItem,
+          inline: this.parseInline(current.join('\n').trim()),
+        });
+        current = [];
+      }
+    };
+    while (i < end) {
+      const line = lines[i];
+      const trimmed = line.trim();
+      const lower = trimmed.toLowerCase();
+      if (lower.startsWith('</ol') || lower.startsWith('</ul')) {
+        if (inItem) {
+          flushItem();
+          inItem = false;
+        }
+        i++;
+        closed = true;
+        break;
+      }
+      if (lower.startsWith('<li')) {
+        if (inItem) {
+          flushItem();
+        }
+        inItem = true;
+        // 同行闭合的 <li>xxx</li>：取标签间内容
+        const closeIdx = lower.indexOf('</li>');
+        if (closeIdx >= 0) {
+          const gt = lower.indexOf('>');
+          if (gt >= 0 && gt + 1 <= closeIdx) {
+            current.push(trimmed.substring(gt + 1, closeIdx));
+            flushItem();
+            inItem = false;
+          }
+        } else {
+          const gt = lower.indexOf('>');
+          if (gt >= 0 && gt + 1 < trimmed.length) {
+            current.push(trimmed.substring(gt + 1));
+          }
+        }
+        i++;
+        continue;
+      }
+      if (lower.startsWith('</li')) {
+        flushItem();
+        inItem = false;
+        i++;
+        continue;
+      }
+      if (inItem) {
+        // li 内容续行（可能内嵌 </li> 尾部）
+        const closeIdx = lower.indexOf('</li>');
+        if (closeIdx >= 0) {
+          current.push(trimmed.substring(0, closeIdx));
+          flushItem();
+          inItem = false;
+        } else {
+          current.push(trimmed);
+        }
+      }
+      i++;
+    }
+    if (inItem) {
+      flushItem();
+    }
+    if (!closed && items.length === 0) {
+      return { node: null, nextIndex: start };
+    }
+    const node: WikiNode = {
+      type: ordered ? NodeType.OrderedList : NodeType.UnorderedList,
+      children: items,
     };
     return { node: node, nextIndex: i };
   }
@@ -935,11 +1022,13 @@ export class WikitextParser {
       }
       return i;
     }
-    // <gallery> 等块级残留 → 忽略
+    // <gallery> 等块级残留 → 忽略（ol/ul/li 由 parseHtmlList 块级处理，此处为行内兜底）
     if (lower.startsWith('<gallery', i) || lower.startsWith('<imagemap', i) ||
       lower.startsWith('<templatestyles', i) || lower.startsWith('<references', i) ||
       lower.startsWith('<noinclude', i) || lower.startsWith('<includeonly', i) ||
-      lower.startsWith('<onlyinclude', i)) {
+      lower.startsWith('<onlyinclude', i) || lower.startsWith('<ol', i) ||
+      lower.startsWith('<ul', i) || lower.startsWith('<li', i) ||
+      lower.startsWith('</ol', i) || lower.startsWith('</ul', i) || lower.startsWith('</li', i)) {
       // 找到 '>' 或对应闭合
       const gt = text.indexOf('>', i);
       if (gt < 0) {
