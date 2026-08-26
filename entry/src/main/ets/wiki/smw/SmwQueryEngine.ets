@@ -64,12 +64,15 @@ export class SmwQueryEngine implements AskHandler {
     this.propCache.clear();
   }
 
-  async query(args: string[], ctx: TemplateContext): Promise<string> {
+  async query(args: string[], ctx: TemplateContext, isShow: boolean = false): Promise<string> {
     try {
       // 展开查询文本中的模板（如 [[地区::{{SUBPAGENAME}}]]），保留 [[...]] 结构
       const expandedArgs: string[] = [];
       for (const a of args) {
         expandedArgs.push(await this.expandQueryText(a, ctx));
+      }
+      if (isShow) {
+        return await this.queryShow(expandedArgs, ctx);
       }
       const q = this.parseQuery(expandedArgs);
       const titles = this.collectTitles(q, ctx);
@@ -91,6 +94,47 @@ export class SmwQueryEngine implements AskHandler {
       Logger.warn(TAG, 'query error: ' + JSON.stringify(e));
       return '';
     }
+  }
+
+  /**
+   * {{#show:页面名|?属性}}：取单个页面的属性值，内联输出（非表格）。
+   * 属性名尾部 '#'（如 ?出售价格#）表示取原始值，忽略单位。
+   */
+  private async queryShow(args: string[], ctx: TemplateContext): Promise<string> {
+    if (args.length === 0 || ctx.index === null) {
+      return '';
+    }
+    const title = args[0].trim();
+    if (title.length === 0) {
+      return '';
+    }
+    // 解析展示属性（?属性 / ?属性# / ?属性=标签 —— #show 只用属性名）
+    const props: string[] = [];
+    for (let k = 1; k < args.length; k++) {
+      const seg = args[k].trim();
+      if (seg.startsWith('?')) {
+        const body = seg.substring(1);
+        const eq = this.topLevelIndexOf(body, '=');
+        const name = (eq > 0 ? body.substring(0, eq) : body).trim();
+        // 去掉尾部 #（SMW 原始值标记）
+        props.push(name.endsWith('#') ? name.substring(0, name.length - 1) : name);
+      }
+    }
+    const pageProps = await this.extractProps(title, ctx);
+    const parts: string[] = [];
+    for (const p of props) {
+      const values = pageProps.get(p);
+      if (values === undefined) {
+        continue;
+      }
+      for (const v of values) {
+        if (v.length > 0) {
+          parts.push(v);
+        }
+      }
+    }
+    Logger.info(TAG, 'show: ' + title + ' props=' + JSON.stringify(props) + ' -> ' + parts.length + ' values');
+    return parts.join('、');
   }
 
   /** 展开查询文本中的模板（如 {{SUBPAGENAME}}），保留 [[...]] 结构 */

@@ -11,7 +11,7 @@ export interface InvokeHandler {
 
 /** #ask/#show 语义查询分发接口（由 SmwQueryEngine 实现） */
 export interface AskHandler {
-  query(args: string[], ctx: TemplateContext): Promise<string>;
+  query(args: string[], ctx: TemplateContext, isShow: boolean): Promise<string>;
 }
 
 /** 模板展开上下文 */
@@ -94,13 +94,15 @@ export class TemplateEngine {
         const expandedInner = await this.expandInner(inner, depth + 1, stack);
         const dc = this.findTopLevelDoubleColon(expandedInner);
         if (dc >= 0) {
-          // SMW [[属性::值]] → 捕获属性，只保留值
+          // SMW [[属性::目标|标签]]：属性存储目标，显示用标签（无标签则显示目标）
           const prop = expandedInner.substring(0, dc).trim();
           const value = expandedInner.substring(dc + 2).trim();
           if (this.ctx.capture !== undefined && this.ctx.capture !== null) {
-            this.ctx.capture(prop, value);
+            const pipe = value.indexOf('|');
+            this.ctx.capture(prop, pipe >= 0 ? value.substring(0, pipe).trim() : value);
           }
-          sb.push(value);
+          const pipe2 = value.indexOf('|');
+          sb.push(pipe2 >= 0 ? value.substring(pipe2 + 1).trim() : value);
           i = end;
           continue;
         }
@@ -322,7 +324,7 @@ export class TemplateEngine {
     }
     if (fname === '#ask' || fname === '#show') {
       if (this.ctx.askHandler !== undefined && this.ctx.askHandler !== null) {
-        return await this.ctx.askHandler.query(args, this.ctx);
+        return await this.ctx.askHandler.query(args, this.ctx, fname === '#show');
       }
       return this.placeholder('SMW 语义查询离线版暂不支持');
     }
