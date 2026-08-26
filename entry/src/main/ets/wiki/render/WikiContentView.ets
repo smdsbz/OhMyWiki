@@ -14,6 +14,15 @@ interface InlineRun {
   style: number; // 1=bold 2=italic
 }
 
+/** 表格行 + 原始行号（过滤后保持稳定 key） */
+interface TableRowPair {
+  row: WikiNode;
+  ri: number;
+}
+
+/** 行数达到该阈值的表格自动显示搜索框（任务/物品等 #ask 查询大表） */
+const TABLE_FILTER_MIN_ROWS = 10;
+
 /**
  * wiki 节点树渲染器：把 WikiNode[] 渲染为 ArkUI 组件。
  * 行内文本用 Flex wrap + 分段 Text（链接为独立可点击 Text）。
@@ -21,18 +30,112 @@ interface InlineRun {
 @Component
 export struct WikiContentView {
   @Prop nodes: WikiNode[] = [];
-  @Prop renderKey: number = 0;
+  @Prop @Watch('onRenderKeyChange') renderKey: number = 0;
+  @State tableFilters: Map<string, string> = new Map();
   onNavigate: (title: string) => void = (title: string) => {
   };
+
+  /** 页面切换（renderKey 变化）时清空表格过滤状态 */
+  onRenderKeyChange(): void {
+    if (this.tableFilters.size > 0) {
+      this.tableFilters = new Map();
+    }
+  }
 
   build() {
     Column({ space: 0 }) {
       ForEach(this.nodes, (node: WikiNode, index: number) => {
-        this.renderBlock(node)
+        this.renderBlock(node, 'b' + index)
       }, (node: WikiNode, index: number) => 'k' + this.renderKey + '_' + index)
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start)
+  }
+
+  // ---------- 表格搜索过滤 ----------
+
+  private setTableFilter(key: string, v: string): void {
+    const cur = this.tableFilters.get(key) ?? '';
+    if (cur === v) {
+      return;
+    }
+    const m = new Map(this.tableFilters);
+    m.set(key, v);
+    this.tableFilters = m;
+  }
+
+  private tableFilterOf(key: string): string {
+    return (this.tableFilters.get(key) ?? '').trim().toLowerCase();
+  }
+
+  private clearTableFilter(key: string): void {
+    if ((this.tableFilters.get(key) ?? '').length === 0) {
+      return;
+    }
+    const m = new Map(this.tableFilters);
+    m.set(key, '');
+    this.tableFilters = m;
+  }
+
+  /** 递归收集节点全部文本（含链接目标/文件名），用于行过滤匹配 */
+  private collectNodeText(node: WikiNode, sb: string[]): void {
+    if (node.text !== undefined && node.text !== null) {
+      sb.push(node.text);
+    }
+    if (node.target !== undefined && node.target !== null) {
+      sb.push(node.target);
+    }
+    const inline = node.inline;
+    if (inline !== undefined && inline !== null) {
+      for (const n of inline) {
+        this.collectNodeText(n, sb);
+      }
+    }
+    const children = node.children;
+    if (children !== undefined && children !== null) {
+      for (const n of children) {
+        this.collectNodeText(n, sb);
+      }
+    }
+  }
+
+  /** 行匹配：关键词按空白分词，全部包含才显示（大小写不敏感） */
+  private rowMatches(row: WikiNode, terms: string[]): boolean {
+    const sb: string[] = [];
+    this.collectNodeText(row, sb);
+    const hay = sb.join(' ').toLowerCase();
+    for (const t of terms) {
+      if (hay.indexOf(t) < 0) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /** 该表格是否显示搜索框 */
+  private tableFilterable(node: WikiNode): boolean {
+    const rows = (node.children ?? []) as WikiNode[];
+    return rows.length >= TABLE_FILTER_MIN_ROWS && !this.hasRowSpan(node);
+  }
+
+  /** 过滤后的行列表（首行表头始终保留） */
+  private visibleRows(node: WikiNode, tKey: string): TableRowPair[] {
+    const allRows = (node.children ?? []) as WikiNode[];
+    const out: TableRowPair[] = [];
+    const kw = this.tableFilterOf(tKey);
+    if (kw.length === 0 || !this.tableFilterable(node)) {
+      for (let i = 0; i < allRows.length; i++) {
+        out.push({ row: allRows[i], ri: i });
+      }
+      return out;
+    }
+    const terms = kw.split(/\s+/).filter((s: string) => s.length > 0);
+    for (let i = 0; i < allRows.length; i++) {
+      if (i === 0 || this.rowMatches(allRows[i], terms)) {
+        out.push({ row: allRows[i], ri: i });
+      }
+    }
+    return out;
   }
 
   private headingSize(level: number): number {
@@ -138,7 +241,7 @@ export struct WikiContentView {
   // ---------- 块级渲染 ----------
 
   @Builder
-  renderBlock(node: WikiNode) {
+  renderBlock(node: WikiNode, tKey: string) {
     if (node.type === NodeType.Heading) {
       Text() {
         this.renderSpans(node.inline ?? [])
@@ -156,7 +259,7 @@ export struct WikiContentView {
         // 带块级 children 的段落（如解析兜底产生的多列表）：逐块渲染
         Column({ space: 0 }) {
           ForEach(node.children as WikiNode[], (n: WikiNode, idx: number) => {
-            this.renderBlock(n)
+            this.renderBlock(n, tKey + 'p' + idx)
           }, (n: WikiNode, idx: number) => 'pc' + this.renderKey + '_' + idx)
         }
         .width('100%')
@@ -168,7 +271,7 @@ export struct WikiContentView {
     } else if (node.type === NodeType.UnorderedList) {
       Column({ space: 4 }) {
         ForEach(node.children ?? [], (item: WikiNode, idx: number) => {
-          this.renderListItem(item, '• ', idx)
+          this.renderListItem(item, '• ', idx, tKey + 'u')
         }, (item: WikiNode, idx: number) => 'ul' + idx)
       }
       .width('100%')
@@ -177,16 +280,16 @@ export struct WikiContentView {
     } else if (node.type === NodeType.OrderedList) {
       Column({ space: 4 }) {
         ForEach(node.children ?? [], (item: WikiNode, idx: number) => {
-          this.renderListItem(item, (idx + 1) + '. ', idx)
+          this.renderListItem(item, (idx + 1) + '. ', idx, tKey + 'o')
         }, (item: WikiNode, idx: number) => 'ol' + idx)
       }
       .width('100%')
       .alignItems(HorizontalAlign.Start)
       .margin({ top: 4, bottom: 4 })
     } else if (node.type === NodeType.ListItem || node.type === NodeType.Indent) {
-      this.renderListItem(node, node.type === NodeType.Indent ? '　' : '• ', 0)
+      this.renderListItem(node, node.type === NodeType.Indent ? '　' : '• ', 0, tKey + 'i')
     } else if (node.type === NodeType.Table) {
-      this.renderTable(node)
+      this.renderTable(node, tKey + 't')
     } else if (node.type === NodeType.EnemyMap) {
       WikiMapView({
         area: node.mapArea ?? '',
@@ -211,7 +314,7 @@ export struct WikiContentView {
     } else if (node.type === NodeType.Container) {
       Column({ space: 0 }) {
         ForEach(node.children ?? [], (n: WikiNode, idx: number) => {
-          this.renderBlock(n)
+          this.renderBlock(n, tKey + 'c' + idx)
         }, (n: WikiNode, idx: number) => 'c' + idx)
       }
       .width('100%')
@@ -235,13 +338,13 @@ export struct WikiContentView {
   }
 
   @Builder
-  renderListItem(item: WikiNode, marker: string, index: number) {
+  renderListItem(item: WikiNode, marker: string, index: number, lKey: string) {
     Column({ space: 2 }) {
       this.renderInlineFlow(item.inline ?? [], marker)
       if (item.children !== undefined && item.children.length > 0) {
         Column({ space: 2 }) {
           ForEach(item.children ?? [], (n: WikiNode, idx: number) => {
-            this.renderBlock(n)
+            this.renderBlock(n, lKey + '_' + index + '_' + idx)
           }, (n: WikiNode, idx: number) => 'li' + index + '_' + idx)
         }
         .width('100%')
@@ -253,7 +356,7 @@ export struct WikiContentView {
   }
 
   @Builder
-  renderTable(node: WikiNode) {
+  renderTable(node: WikiNode, tKey: string) {
     Column() {
       if (node.caption !== undefined && (node.caption as WikiNode[]).length > 0) {
         Text() {
@@ -264,14 +367,43 @@ export struct WikiContentView {
         .fontColor('#5a5a5e')
         .margin({ top: 6, bottom: 2 })
       }
+      if (this.tableFilterable(node)) {
+        // 大表格搜索框：实时过滤行
+        Row({ space: 8 }) {
+          TextInput({ placeholder: '搜索表格内容…', text: this.tableFilters.get(tKey) ?? '' })
+            .layoutWeight(1)
+            .height(38)
+            .fontSize(14)
+            .padding({ left: 12, right: 12 })
+            .backgroundColor('#f2f2f7')
+            .borderRadius(10)
+            .onChange((v: string) => {
+              this.setTableFilter(tKey, v);
+            })
+          if (this.tableFilterOf(tKey).length > 0) {
+            Text((this.visibleRows(node, tKey).length - 1) + '/' + ((node.children ?? []).length - 1))
+              .fontSize(12)
+              .fontColor('#8a8a8e')
+            Text('✕')
+              .fontSize(14)
+              .fontColor('#8a8a8e')
+              .padding(6)
+              .onClick(() => {
+                this.clearTableFilter(tKey);
+              })
+          }
+        }
+        .width('100%')
+        .margin({ top: 8, bottom: 4 })
+      }
       if (this.hasRowSpan(node)) {
         this.renderTableGrid(node)
       } else {
         Column() {
-          ForEach(node.children ?? [], (row: WikiNode, rIdx: number) => {
+          ForEach(this.visibleRows(node, tKey), (item: TableRowPair, vIdx: number) => {
             // Stretch：同行单元格拉伸到最高格的高度，保持行内等高（对齐 HTML 表格行为）
             Flex({ direction: FlexDirection.Row, alignItems: ItemAlign.Stretch }) {
-              ForEach(row.children ?? [], (cell: WikiNode, cIdx: number) => {
+              ForEach(item.row.children ?? [], (cell: WikiNode, cIdx: number) => {
                 Column() {
                   this.renderInlineFlow(cell.inline ?? [], '')
                 }
@@ -280,10 +412,10 @@ export struct WikiContentView {
                 .backgroundColor(cell.type === NodeType.TableHeaderCell ? '#eef1f6' : '#ffffff')
                 .border({ width: 1, color: '#d5d8dd' })
                 .alignItems(HorizontalAlign.Start)
-              }, (cell: WikiNode, cIdx: number) => 'cell' + rIdx + '_' + cIdx)
+              }, (cell: WikiNode, cIdx: number) => 'cell' + item.ri + '_' + cIdx)
             }
             .width('100%')
-          }, (row: WikiNode, rIdx: number) => 'row' + rIdx)
+          }, (item: TableRowPair, vIdx: number) => 'frow_' + item.ri)
         }
         .border({ width: 1, color: '#c5c8cd' })
         .borderRadius(4)
