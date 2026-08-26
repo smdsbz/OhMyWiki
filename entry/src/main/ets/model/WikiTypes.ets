@@ -51,6 +51,16 @@ export enum NodeType {
   LineBreak = 'br',
   Placeholder = 'placeholder',
   Container = 'container',
+  /** 敌人地图位置（底图 + 标记点） */
+  EnemyMap = 'enemyMap',
+}
+
+/** 地图标记点（相对底图的百分比坐标） */
+export interface MapMarker {
+  /** 距左侧百分比 0-100 */
+  left: number;
+  /** 距顶部百分比 0-100 */
+  top: number;
 }
 
 /** wikitext 解析后的节点 */
@@ -90,6 +100,14 @@ export interface WikiNode {
   rowSpan?: number;
   /** 单元格列位置（解析表格时按 rowspan 占位计算） */
   colIndex?: number;
+  /** 地图区域名（对应 Mapinfo Name，如 ma02a_f01） */
+  mapArea?: string;
+  /** 地图标题（mapName・menuGroup） */
+  mapTitle?: string;
+  /** 地图宽高比（宽/高） */
+  mapRatio?: number;
+  /** 地图标记点 */
+  mapMarkers?: MapMarker[];
 }
 
 /** 行内 token 类型 */

@@ -1,5 +1,6 @@
 import { NodeType, WikiNode } from '../../model/WikiTypes';
 import { WikiImage } from './WikiImage';
+import { WikiMapView } from './WikiMapView';
 
 /** 行内渲染单元 */
 interface InlineRun {
@@ -186,6 +187,13 @@ export struct WikiContentView {
       this.renderListItem(node, node.type === NodeType.Indent ? '　' : '• ', 0)
     } else if (node.type === NodeType.Table) {
       this.renderTable(node)
+    } else if (node.type === NodeType.EnemyMap) {
+      WikiMapView({
+        area: node.mapArea ?? '',
+        title: node.mapTitle ?? '',
+        ratio: node.mapRatio ?? 1,
+        markers: node.mapMarkers ?? [],
+      })
     } else if (node.type === NodeType.FileImage) {
       this.renderImageNode(node)
     } else if (node.type === NodeType.Pre) {

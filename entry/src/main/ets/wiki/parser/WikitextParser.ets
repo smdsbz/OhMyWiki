@@ -1,6 +1,6 @@
 import { Logger } from '../../common/Logger';
 import { WikiIndex } from '../../data/WikiIndex';
-import { NodeType, WikiNode } from '../../model/WikiTypes';
+import { NodeType, WikiNode, MapMarker } from '../../model/WikiTypes';
 import { BraceUtil } from './BraceUtil';
 import { PLACEHOLDER_MARK } from '../template/TemplateEngine';
 
@@ -76,6 +76,43 @@ export class WikitextParser {
     return t.length > 0 && (t.charAt(0) === '*' || t.charAt(0) === '#' || t.charAt(0) === ';' || t.charAt(0) === ':');
   }
 
+  /** 解析敌人地图行：@@ENEMYMAP|区域|标题|宽|高|left,top;left,top...@@ */
+  private parseEnemyMapLine(line: string): WikiNode | null {
+    try {
+      const body = line.substring('@@ENEMYMAP|'.length, line.length - 2);
+      const parts = body.split('|');
+      if (parts.length < 5) {
+        return null;
+      }
+      const area = parts[0];
+      const title = parts[1];
+      const w = parseFloat(parts[2]);
+      const h = parseFloat(parts[3]);
+      const markers: MapMarker[] = [];
+      if (parts[4].length > 0) {
+        for (const seg of parts[4].split(';')) {
+          const xy = seg.split(',');
+          if (xy.length === 2) {
+            markers.push({ left: parseFloat(xy[0]), top: parseFloat(xy[1]) });
+          }
+        }
+      }
+      if (area.length === 0 || isNaN(w) || isNaN(h) || h <= 0 || markers.length === 0) {
+        return null;
+      }
+      const node: WikiNode = {
+        type: NodeType.EnemyMap,
+        mapArea: area,
+        mapTitle: title,
+        mapRatio: w / h,
+        mapMarkers: markers,
+      };
+      return node;
+    } catch (e) {
+      return null;
+    }
+  }
+
   /** 解析块级结构 */
   private parseBlocks(lines: string[], start: number, end: number): WikiNode[] {
     const out: WikiNode[] = [];
@@ -124,6 +161,16 @@ export class WikitextParser {
         flush();
         const hr: WikiNode = { type: NodeType.Hr };
         out.push(hr);
+        i++;
+        continue;
+      }
+      // 敌人地图：@@ENEMYMAP|区域|标题|宽|高|left,top;left,top...@@
+      if (trimmed.startsWith('@@ENEMYMAP|') && trimmed.endsWith('@@')) {
+        flush();
+        const node = this.parseEnemyMapLine(trimmed);
+        if (node !== null) {
+          out.push(node);
+        }
         i++;
         continue;
       }

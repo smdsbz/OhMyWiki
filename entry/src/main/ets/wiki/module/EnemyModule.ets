@@ -81,6 +81,31 @@ interface EnemyIdEntry {
   title?: string;
 }
 
+/** Gmk/enemy 条目（敌人放置点） */
+interface GmkEnemyJson {
+  Name: string;
+  PosX?: number;
+  PosY?: number;
+  PosZ?: number;
+  areas?: string[];
+  POP_TIME?: number;
+  popWeather?: number;
+  ZoneID?: number;
+}
+
+/** Mapinfo 条目（底图世界坐标范围） */
+interface MapinfoJson {
+  Name: string;
+  mapName?: string;
+  menuGroup?: string;
+  Width?: number;
+  Height?: number;
+  LowerX?: number;
+  LowerZ?: number;
+  UpperX?: number;
+  UpperZ?: number;
+}
+
 /**
  * Enemy 模块（Module:Enemy 的 ArkTS 移植 · 基础统计部分）。
  * 渲染敌人页的核心数据表（基本信息/六维/抗性/反应抗性/被动能力/击杀奖励）。
@@ -183,6 +208,11 @@ export class EnemyModule {
         sb.push(EnemyModule.rowTable(['EXP', 'Gold', 'WP', 'SP'],
           [String(exp), String(gold), String(wp), String(sp)]));
       }
+      // 地图位置（对应原站 multi-xb2map-enemy 交互地图）
+      const mapSection = await EnemyModule.buildMapSection(ctx, id, category);
+      if (mapSection.length > 0) {
+        sb.push(mapSection);
+      }
       sb.push(PLACEHOLDER_MARK + '武技/掉落明细由 Lua+SMW 生成，离线版暂不渲染' + '\u0000');
       return sb.join('\n');
     } catch (e) {
@@ -240,6 +270,96 @@ export class EnemyModule {
     set('倒地', reactions[3]);
     set('浮空', reactions[4]);
     set('猛击', reactions[5]);
+  }
+
+  /**
+   * 构建地图位置段：EnemyGmkMap → Gmk/enemy 坐标 → Mapinfo 世界范围 → 百分比标记。
+   * 输出 `@@ENEMYMAP|区域|标题|宽|高|left,top;...@@` 行，由 WikitextParser 转 EnemyMap 节点。
+   * 打捞/召唤敌人无地面放置点，跳过（对应原站的"出现方式"）。
+   */
+  private static async buildMapSection(ctx: TemplateContext, id: number, category: string): Promise<string> {
+    if (category === '打捞敌人' || category === '召唤敌人') {
+      return '';
+    }
+    try {
+      const gmkMap = await JsonDataReader.read(ctx, 'EnemyGmkMap') as Record<string, Object> | null;
+      if (gmkMap === null) {
+        return '';
+      }
+      const raw = gmkMap[String(id)];
+      if (raw === undefined) {
+        return '';
+      }
+      const names: string[] = raw as string[];
+      if (names.length === 0) {
+        return '';
+      }
+      const nameSet: Set<string> = new Set(names);
+      const gmkList = await JsonDataReader.read(ctx, 'Gmk/enemy') as Object[] | null;
+      if (gmkList === null) {
+        return '';
+      }
+      // 按区域分组放置点
+      const byArea: Map<string, GmkEnemyJson[]> = new Map();
+      for (const o of gmkList) {
+        const g = o as GmkEnemyJson;
+        if (!nameSet.has(g.Name) || g.areas === undefined || g.areas.length === 0) {
+          continue;
+        }
+        const area = g.areas[0];
+        if (area.length === 0 || g.PosX === undefined || g.PosZ === undefined) {
+          continue;
+        }
+        const arr = byArea.get(area);
+        if (arr === undefined) {
+          byArea.set(area, [g]);
+        } else {
+          arr.push(g);
+        }
+      }
+      if (byArea.size === 0) {
+        return '';
+      }
+      const sb: string[] = ['== 地图位置 =='];
+      for (const area of byArea.keys()) {
+        const info = await JsonDataReader.read(ctx, 'Mapinfo/' + area) as MapinfoJson | null;
+        if (info === null || info.LowerX === undefined || info.UpperX === undefined ||
+          info.LowerZ === undefined || info.UpperZ === undefined ||
+          info.Width === undefined || info.Height === undefined || info.Height <= 0) {
+          continue;
+        }
+        const spanX = info.UpperX - info.LowerX;
+        const spanZ = info.UpperZ - info.LowerZ;
+        if (spanX <= 0 || spanZ <= 0) {
+          continue;
+        }
+        const marks: string[] = [];
+        for (const g of byArea.get(area) as GmkEnemyJson[]) {
+          // 世界坐标 → 图内百分比（与原站 Xb2map 的 Leaflet bounds 取负一致）
+          const leftPct = (info.UpperX - (g.PosX as number)) / spanX * 100;
+          const topPct = ((g.PosZ as number) - info.LowerZ) / spanZ * 100;
+          if (leftPct < -5 || leftPct > 105 || topPct < -5 || topPct > 105) {
+            continue;
+          }
+          marks.push(Math.max(0, Math.min(100, leftPct)).toFixed(1) + ',' +
+            Math.max(0, Math.min(100, topPct)).toFixed(1));
+        }
+        if (marks.length === 0) {
+          continue;
+        }
+        const title = (info.mapName ?? '') + (info.menuGroup !== undefined && info.menuGroup.length > 0 &&
+          info.menuGroup !== info.mapName ? '・' + info.menuGroup : '');
+        sb.push('@@ENEMYMAP|' + area + '|' + title + '|' + info.Width + '|' + info.Height +
+          '|' + marks.join(';') + '@@');
+      }
+      if (sb.length <= 1) {
+        return '';
+      }
+      return sb.join('\n');
+    } catch (e) {
+      Logger.warn(TAG, 'buildMapSection error: ' + JSON.stringify(e));
+      return '';
+    }
   }
 
   private static async lookupId(ctx: TemplateContext, name: string): Promise<number> {

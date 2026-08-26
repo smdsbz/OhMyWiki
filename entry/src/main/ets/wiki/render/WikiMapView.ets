@@ -1,0 +1,115 @@
+import { image } from '@kit.ImageKit';
+import { ImageLoader } from '../../common/ImageLoader';
+import { MapMarker } from '../../model/WikiTypes';
+
+/**
+ * 敌人地图位置组件：底图（<区域>_map_0.png）+ 红点标记。
+ * 标记坐标为相对底图的百分比（由 Mapinfo 世界坐标换算而来）。
+ */
+@Component
+export struct WikiMapView {
+  /** 地图区域名（Mapinfo Name，如 ma02a_f01） */
+  area: string = '';
+  /** 标题（mapName・menuGroup） */
+  title: string = '';
+  /** 底图宽高比 */
+  ratio: number = 1;
+  markers: MapMarker[] = [];
+  @State pm: image.PixelMap | null = null;
+  @State failed: boolean = false;
+
+  aboutToAppear(): void {
+    this.load();
+  }
+
+  async load(): Promise<void> {
+    const imgName = this.imageFileName();
+    const result = await ImageLoader.load(imgName);
+    if (result !== null) {
+      this.pm = result;
+    } else {
+      this.failed = true;
+    }
+  }
+
+  /** 底图文件名：区域名首字母大写 + _map_0.png（如 Ma02a_f01_map_0.png） */
+  private imageFileName(): string {
+    const a = this.area;
+    if (a.length === 0) {
+      return '';
+    }
+    return a.charAt(0).toUpperCase() + a.substring(1) + '_map_0.png';
+  }
+
+  build() {
+    Column() {
+      Text(this.title)
+        .fontSize(13)
+        .fontWeight(FontWeight.Medium)
+        .fontColor('#5a5a5e')
+        .margin({ top: 8, bottom: 4 })
+      if (this.failed) {
+        Column() {
+          Text('⚠ 地图图片缺失：' + this.imageFileName())
+            .fontSize(12)
+            .fontColor('#b0b0b4')
+        }
+        .width('100%')
+        .height(120)
+        .justifyContent(FlexAlign.Center)
+        .backgroundColor('#f0f0f2')
+        .borderRadius(6)
+      } else if (this.pm !== null) {
+        Stack() {
+          Image(this.pm as image.PixelMap)
+            .width('100%')
+            .height('100%')
+            .objectFit(ImageFit.Fill)
+            .interpolation(ImageInterpolation.High)
+          ForEach(this.markers, (m: MapMarker, idx: number) => {
+            // 百分比占位定位（空容器加 fontSize 确保参与布局）
+            Column() {
+              Text('')
+                .fontSize(1)
+                .height(m.top.toString() + '%')
+                .width('100%')
+              Row() {
+                Text('')
+                  .fontSize(1)
+                  .width(m.left.toString() + '%')
+                  .height(1)
+                Circle({ width: 16, height: 16 })
+                  .fill('#e5484d')
+                  .stroke('#ffffff')
+                  .strokeWidth(2.5)
+                  .shadow({ radius: 3, color: '#66000000', offsetX: 0, offsetY: 1 })
+                  .margin({ left: -8 })
+              }
+              .alignItems(VerticalAlign.Center)
+            }
+            .width('100%')
+            .height('100%')
+          }, (m: MapMarker, idx: number) => 'mk' + idx + '_' + m.left.toFixed(2) + '_' + m.top.toFixed(2))
+        }
+        .width('100%')
+        .aspectRatio(this.ratio > 0 ? this.ratio : 1)
+        .borderRadius(6)
+        .clip(true)
+      } else {
+        Column() {
+          Text('地图加载中…')
+            .fontSize(12)
+            .fontColor('#b0b0b4')
+        }
+        .width('100%')
+        .aspectRatio(this.ratio > 0 ? this.ratio : 1)
+        .justifyContent(FlexAlign.Center)
+        .backgroundColor('#f5f5f7')
+        .borderRadius(6)
+      }
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+    .margin({ top: 4, bottom: 8 })
+  }
+}
