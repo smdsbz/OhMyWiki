@@ -1,6 +1,7 @@
 import { AbilityConstant, ConfigurationConstant, UIAbility, Want } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
+import { util } from '@kit.ArkTS';
 
 const DOMAIN = 0x0000;
 
@@ -10,6 +11,23 @@ export default class EntryAbility extends UIAbility {
       this.context.getApplicationContext().setColorMode(ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET);
     } catch (err) {
       hilog.error(DOMAIN, 'testTag', 'Failed to set colorMode. Cause: %{public}s', JSON.stringify(err));
+    }
+    // 调试直达：aa start --ps pageB64 <base64(UTF-8 页名)>，站点加载后 Index 自动跳转
+    try {
+      const p = want.parameters;
+      if (p !== undefined && p !== null) {
+        const b64 = p.pageB64;
+        if (typeof b64 === 'string' && b64.length > 0) {
+          const bytes = new util.Base64Helper().decodeSync(b64);
+          const text = new util.TextDecoder('utf-8').decodeWithStream(bytes);
+          if (text.trim().length > 0) {
+            AppStorage.setOrCreate('debugJumpPage', text.trim());
+            hilog.info(DOMAIN, 'testTag', 'debugJumpPage=%{public}s', text);
+          }
+        }
+      }
+    } catch (err) {
+      hilog.error(DOMAIN, 'testTag', 'debugJump parse failed: %{public}s', JSON.stringify(err));
     }
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onCreate');
   }

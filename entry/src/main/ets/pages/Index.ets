@@ -50,6 +50,7 @@ struct Index {
       }
       this.sites = items;
       Logger.info(TAG, 'discovered ' + items.length + ' sites');
+      await this.tryDebugJump(items);
     } catch (e) {
       this.errorMsg = '扫描失败：' + JSON.stringify(e);
       Logger.error(TAG, this.errorMsg);
@@ -129,7 +130,7 @@ struct Index {
     Logger.info(TAG, 'importWikiZip: importing=false');
   }
 
-  async openSite(item: SiteItem): Promise<void> {
+  async openSite(item: SiteItem, startTitle?: string): Promise<void> {
     const ok = await AppStore.openSite(item.site);
     if (!ok) {
       this.errorMsg = '打开站点失败：' + item.site.name;
@@ -138,8 +139,23 @@ struct Index {
     const params: ReaderParams = {
       siteKey: item.site.sourceKey,
       siteName: item.site.name,
+      title: startTitle,
     };
     this.pathStack.pushPathByName('Reader', params);
+  }
+
+  /** 调试直达：EntryAbility 启动参数指定的页面，站点扫描完成后自动跳转（仅消费一次） */
+  private async tryDebugJump(items: SiteItem[]): Promise<void> {
+    const page = AppStorage.get<string>('debugJumpPage') ?? '';
+    if (page.length === 0) {
+      return;
+    }
+    AppStorage.setOrCreate('debugJumpPage', '');
+    let target: SiteItem | null = items.length > 0 ? items[0] : null;
+    if (target !== null) {
+      Logger.info(TAG, 'debug jump -> ' + page);
+      await this.openSite(target, page);
+    }
   }
 
   sourceBadgeText(): string {

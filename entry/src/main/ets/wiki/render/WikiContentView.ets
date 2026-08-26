@@ -269,7 +269,8 @@ export struct WikiContentView {
       } else {
         Column() {
           ForEach(node.children ?? [], (row: WikiNode, rIdx: number) => {
-            Row() {
+            // Stretch：同行单元格拉伸到最高格的高度，保持行内等高（对齐 HTML 表格行为）
+            Flex({ direction: FlexDirection.Row, alignItems: ItemAlign.Stretch }) {
               ForEach(row.children ?? [], (cell: WikiNode, cIdx: number) => {
                 Column() {
                   this.renderInlineFlow(cell.inline ?? [], '')
@@ -282,7 +283,6 @@ export struct WikiContentView {
               }, (cell: WikiNode, cIdx: number) => 'cell' + rIdx + '_' + cIdx)
             }
             .width('100%')
-            .alignItems(VerticalAlign.Top)
           }, (row: WikiNode, rIdx: number) => 'row' + rIdx)
         }
         .border({ width: 1, color: '#c5c8cd' })

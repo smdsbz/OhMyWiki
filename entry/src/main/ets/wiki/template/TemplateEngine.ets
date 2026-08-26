@@ -293,7 +293,8 @@ export class TemplateEngine {
       return await this.expandInner(def, depth + 1, stack);
     }
     if (fname === '#expr') {
-      const expr = this.get(args, 0);
+      // 先展开参数中的嵌套调用（如 {{#expr:{{#show:...}}*2}}），再求值
+      const expr = await this.expandInner(this.get(args, 0), depth + 1, stack);
       return this.evalExpr(expr);
     }
     if (fname === '#titleparts') {
@@ -657,20 +658,23 @@ export class TemplateEngine {
     return num;
   }
 
-  /** 模板源码清理：注释、noinclude 移除、includeonly/onlyinclude 内容保留 */
+  /** 模板源码清理：注释、noinclude 移除、includeonly 标签剥离（内容保留）。
+   * 容错：站点转储存在未闭合的 <includeonly>（如 ShopGoodsPouchItemRow 尾部笔误），
+   * MediaWiki 对未闭合标签按“延伸到文末”处理，等价于直接剥标签保内容。 */
   private cleanSource(src: string): string {
     let s = src.replace(/<!--[\s\S]*?-->/g, '');
-    const inc = s.match(/<includeonly>([\s\S]*?)<\/includeonly>/g);
-    if (inc !== null && inc.length > 0) {
-      let only = '';
-      for (const seg of inc) {
-        only += seg.replace(/<includeonly>/g, '').replace(/<\/includeonly>/g, '');
-      }
-      return only;
+    // onlyinclude：仅保留其中内容
+    const only = s.match(/<onlyinclude>[\s\S]*?<\/onlyinclude>/g);
+    if (only !== null && only.length > 0) {
+      return only.map((seg: string) => seg.replace(/<\/?onlyinclude>/g, '')).join('');
     }
+    // noinclude 移除（含未闭合：从标签到文末）
     s = s.replace(/<noinclude>[\s\S]*?<\/noinclude>/g, '');
+    s = s.replace(/<noinclude>[\s\S]*$/g, '');
     s = s.replace(/<noinclude\s*\/>/g, '');
-    s = s.replace(/<onlyinclude>/g, '').replace(/<\/onlyinclude>/g, '');
+    // includeonly：剥标签保内容（配对与未闭合均处理）
+    s = s.replace(/<includeonly\s*\/>/g, '');
+    s = s.replace(/<\/?includeonly>/g, '');
     return s;
   }
 }
