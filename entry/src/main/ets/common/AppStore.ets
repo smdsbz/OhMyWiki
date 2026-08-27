@@ -180,8 +180,15 @@ export class AppStore {
       AppStore.shopFinder = new ShopFinder(AppStore.activeIndex);
       AppStore.shopFinderKey = key;
     }
-    AppStore.shopFinder.warm();
     return AppStore.shopFinder;
+  }
+
+  /** 预热商店索引（首页渲染完后延迟调用，避免 87 页扫描抢占首页加载 IO） */
+  static warmShopFinder(): void {
+    if (AppStore.activeIndex === null) {
+      return;
+    }
+    AppStore.getShopFinder()?.warm();
   }
 
   /** 发现所有可用站点（遍历各数据源的顶层文件夹） */
@@ -219,7 +226,7 @@ export class AppStore {
     const idx = new WikiIndex(src, site.rootRel);
     await idx.load();
     AppStore.activeIndex = idx;
-    // 后台预构建商店索引（供异刃页“喜欢的物品获取地点”使用）
+    // 商店索引懒创建（不预热：87 页扫描会与首页加载抢 IO，改为首页渲染后 warmShopFinder 延迟触发）
     AppStore.shopFinder = null;
     AppStore.shopFinderKey = '';
     AppStore.getShopFinder();

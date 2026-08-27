@@ -49,25 +49,34 @@ export class WikiIndex {
   async load(): Promise<void> {
     this.titleToPath.clear();
     this.imageSet.clear();
-    Logger.info(TAG, 'load: rootRel=' + this.rootRel + ' source=' + this.source.key);
     const manifestOk = await this.loadManifest();
     if (!manifestOk) {
       await this.walkPages();
+      // 无 manifest 时只能目录枚举图片（有 manifest 则零 IO 复用 ns=6 条目）
+      await this.loadImagesFromDir();
+    } else {
+      this.loadImagesFromManifest();
     }
-    await this.loadImages();
     this.loaded = true;
     Logger.info(TAG, 'index loaded: ' + this.titleToPath.size + ' pages, ' + this.imageSet.size + ' images');
   }
 
+  /** manifest ns=6 条目派生的图片名（loadManifest 时顺手收集） */
+  private manifestImages: string[] = [];
+
   private async loadManifest(): Promise<boolean> {
     try {
       const relPath = this.rel('manifest.json');
-      Logger.info(TAG, 'loadManifest: reading ' + relPath);
       const text = await this.source.readText(relPath);
       const arr = JSON.parse(text) as ManifestEntry[];
+      const prefix = '文件:';
       for (const e of arr) {
         if (e.path && e.title) {
           this.titleToPath.set(this.normalizeTitle(e.title), 'pages/' + e.path);
+          // ns=6 文件页 → 图片名（免 images 目录递归枚举，省 3s+）
+          if (e.ns === 6 && e.title.startsWith(prefix)) {
+            this.manifestImages.push(e.title.substring(prefix.length));
+          }
         }
       }
       return true;
@@ -102,7 +111,19 @@ export class WikiIndex {
     }
   }
 
-  private async loadImages(): Promise<void> {
+  /** 图片清单：复用 manifest ns=6 条目（零 IO，替代递归枚举 5508 项的 3s+） */
+  private loadImagesFromManifest(): void {
+    for (const base of this.manifestImages) {
+      this.imageSet.add(base);
+      const norm = this.normalizeImageName(base);
+      if (!this.imageNormMap.has(norm)) {
+        this.imageNormMap.set(norm, base);
+      }
+    }
+    Logger.info(TAG, 'loadImages: from manifest, ' + this.imageSet.size + ' images');
+  }
+
+  private async loadImagesFromDir(): Promise<void> {
     const files = await this.source.listAllFiles(this.rel('images'));
     for (const f of files) {
       const idx = f.lastIndexOf('/');

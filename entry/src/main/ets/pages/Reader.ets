@@ -109,6 +109,10 @@ export struct Reader {
       this.nodes = nodes;
       this.loading = false;
       this.pageSeq++;
+      // 首页渲染完成后预热商店索引（延迟：不抢占首帧 IO；幂等）
+      setTimeout(() => {
+        AppStore.warmShopFinder();
+      }, 1500);
     } catch (e) {
       Logger.error(TAG, 'loadPage error: ' + JSON.stringify(e));
       this.errorMsg = '渲染失败：' + JSON.stringify(e);
