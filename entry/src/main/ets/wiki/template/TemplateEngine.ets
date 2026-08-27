@@ -268,7 +268,8 @@ export class TemplateEngine {
       return await this.expandInner(a === b ? this.get(args, 2) : this.get(args, 3), depth + 1, stack);
     }
     if (fname === '#ifexist') {
-      const title = this.get(args, 0).trim();
+      // 标题参数先展开嵌套魔术字/模板（如 {{#ifexist:文件:{{NAMESPACE}}-{{PAGENAME}}.jpg|...}}）
+      const title = (await this.expandInner(this.get(args, 0), depth + 1, stack)).trim();
       const exists = this.ctx.index !== null && this.ctx.index.pageExists(title);
       return await this.expandInner(exists ? this.get(args, 1) : this.get(args, 2), depth + 1, stack);
     }

@@ -341,7 +341,6 @@ export struct WikiContentView {
       }
       .width('100%')
       .alignItems(node.align === 'center' ? HorizontalAlign.Center : HorizontalAlign.Start)
-      .padding(node.align === 'center' ? 0 : { left: 8 })
     } else if (node.type === NodeType.Link) {
       Text() {
         this.renderSpans(node.inline ?? [])
@@ -615,8 +614,9 @@ export struct WikiContentView {
         .margin({ top: 2 })
       }
     }
+    // 块级图片：容器全宽居中，固定宽（限宽/限高注释）图片与说明文字水平居中
     .width('100%')
-    .alignItems(node.fileAlign === 'center' ? HorizontalAlign.Center : HorizontalAlign.Start)
+    .alignItems(HorizontalAlign.Center)
     .margin({ top: 6, bottom: 6 })
   }
 
@@ -690,7 +690,9 @@ export struct WikiContentView {
     return segs;
   }
 
-  /** 合并相邻同样式 Span（仅结构归并，文本内容忠实于源数据——空格等原样保留） */
+  /** 合并相邻同样式 Span（仅结构归并，文本内容忠实于源数据——空格等原样保留）。
+   *  注：中文避头尾（行首不出、。・等） ArkUI Text 引擎不支持：U+2060 joiner、
+   *  lineBreakStrategy(HIGH_QUALITY)、wordBreak(BREAK_WORD) 均实测无效，勿再尝试 */
   private normalizeSpans(spans: RichSpan[]): RichSpan[] {
     const merged: RichSpan[] = [];
     for (const s of spans) {
@@ -761,18 +763,13 @@ export struct WikiContentView {
         .fontSize(15)
         .lineHeight(22)
       } else if (seg.kind === 'image') {
-        if (seg.align === 'center') {
-          Column() {
-            WikiImage({ fileName: seg.fileName ?? '', fileWidth: seg.width ?? 0,
-              fileHeight: seg.height ?? 0, block: true })
-          }
-          .width('100%')
-          .alignItems(HorizontalAlign.Center)
-        } else {
-          // 无宽度标注的图片（如任务缩略图 [[文件:xxx|无]]）铺满内容宽度
+        // 块级图片：全宽容器居中，固定宽（限宽/限高注释）图片水平居中，铺满图不受影响
+        Column() {
           WikiImage({ fileName: seg.fileName ?? '', fileWidth: seg.width ?? 0,
             fileHeight: seg.height ?? 0, block: true })
         }
+        .width('100%')
+        .alignItems(HorizontalAlign.Center)
       } else if (seg.kind === 'placeholder') {
         Text('⚠ ' + (seg.reason ?? '内容暂不支持渲染'))
           .fontSize(12)
