@@ -2,6 +2,7 @@ import { Logger } from '../../common/Logger';
 import { WikiIndex } from '../../data/WikiIndex';
 import { BraceUtil } from '../parser/BraceUtil';
 import { TemplateContext, TemplateEngine, AskHandler } from '../template/TemplateEngine';
+import { EnemyModule } from '../module/EnemyModule';
 
 const TAG = 'SmwQueryEngine';
 
@@ -78,8 +79,11 @@ export class SmwQueryEngine implements AskHandler {
       const titles = this.collectTitles(q, ctx);
       const rows: Row[] = [];
       const reportProgress = ctx.onProgress !== undefined && ctx.onProgress !== null;
+      // 敌人命名空间快速路径：过滤/展示/排序属性全部可由游戏 JSON 直取时，
+      // 跳过逐页完整模板展开（每敌人 1 次 IO），无法解析的页面回退完整路径
+      const useEnemyFast = q.nsPrefix === '敌人:' && this.enemyFastCoverable(q);
       for (let ti = 0; ti < titles.length; ti++) {
-        const props = await this.extractProps(titles[ti], ctx);
+        const props = await this.extractPropsSmart(titles[ti], ctx, useEnemyFast);
         if (this.matches(q, props)) {
           rows.push({ title: titles[ti], props: props });
         }
@@ -89,7 +93,7 @@ export class SmwQueryEngine implements AskHandler {
         }
       }
       Logger.info(TAG, 'query: titles=' + titles.length + ' matched=' + rows.length +
-        ' ns=' + q.nsPrefix + ' filters=' + JSON.stringify(q.propFilters));
+        ' ns=' + q.nsPrefix + ' fast=' + useEnemyFast + ' filters=' + JSON.stringify(q.propFilters));
       this.sortRows(rows, q);
       if (q.limit > 0 && rows.length > q.limit) {
         rows.length = q.limit;
@@ -284,6 +288,49 @@ export class SmwQueryEngine implements AskHandler {
       return ctx.index.titlesByPrefix(q.nsPrefix);
     }
     return ctx.index.titlesByPrefix('');
+  }
+
+  /** 敌人快速路径可覆盖的属性集（与 EnemyModule.propsFast 保持一致） */
+  private static readonly ENEMY_FAST_PROPS: string[] =
+    ['ZoneID', '敌人分类', '地域', '等级', '等级浮动', '无视等级差补正'];
+
+  /** 查询的过滤/展示/排序属性是否全部在敌人快速路径覆盖范围内 */
+  private enemyFastCoverable(q: AskQuery): boolean {
+    const fast = SmwQueryEngine.ENEMY_FAST_PROPS;
+    for (const f of q.propFilters) {
+      if (fast.indexOf(f.prop) < 0) {
+        return false;
+      }
+    }
+    for (const p of q.displayProps) {
+      if (fast.indexOf(p.prop) < 0) {
+        return false;
+      }
+    }
+    for (const s of q.sortProps) {
+      if (fast.indexOf(s) < 0) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /** 属性提取：优先敌人快速路径（JSON 直取），null 时回退完整展开；结果统一入 propCache */
+  private async extractPropsSmart(title: string, ctx: TemplateContext,
+    useEnemyFast: boolean): Promise<Map<string, string[]>> {
+    if (!useEnemyFast) {
+      return await this.extractProps(title, ctx);
+    }
+    const cached = this.propCache.get(title);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const fast = await EnemyModule.propsFast(ctx, title);
+    if (fast !== null) {
+      this.propCache.set(title, fast);
+      return fast;
+    }
+    return await this.extractProps(title, ctx);
   }
 
   /** 提取页面语义属性（模板展开 + 捕获 [[属性::值]] / {{#set:...}}），带缓存 */
