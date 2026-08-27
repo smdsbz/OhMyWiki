@@ -77,10 +77,15 @@ export class SmwQueryEngine implements AskHandler {
       const q = this.parseQuery(expandedArgs);
       const titles = this.collectTitles(q, ctx);
       const rows: Row[] = [];
-      for (const t of titles) {
-        const props = await this.extractProps(t, ctx);
+      const reportProgress = ctx.onProgress !== undefined && ctx.onProgress !== null;
+      for (let ti = 0; ti < titles.length; ti++) {
+        const props = await this.extractProps(titles[ti], ctx);
         if (this.matches(q, props)) {
-          rows.push({ title: t, props: props });
+          rows.push({ title: titles[ti], props: props });
+        }
+        // 进度回报：每 20 页或最后一页（Reader 侧 total≥30 才展示进度条）
+        if (reportProgress && ((ti + 1) % 20 === 0 || ti === titles.length - 1)) {
+          ctx.onProgress!(ti + 1, titles.length);
         }
       }
       Logger.info(TAG, 'query: titles=' + titles.length + ' matched=' + rows.length +

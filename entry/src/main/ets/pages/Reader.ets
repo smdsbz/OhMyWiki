@@ -26,6 +26,8 @@ export struct Reader {
   @State loading: boolean = true;
   @State errorMsg: string = '';
   @State pageSeq: number = 0;
+  @State progressDone: number = 0;
+  @State progressTotal: number = 0;
   private redirectDepth: number = 0;
   private pathStack: NavPathStack = new NavPathStack();
 
@@ -52,6 +54,8 @@ export struct Reader {
   async loadPage(title: string): Promise<void> {
     this.loading = true;
     this.errorMsg = '';
+    this.progressDone = 0;
+    this.progressTotal = 0;
     try {
       const index = AppStore.getActiveIndex();
       if (index === null) {
@@ -88,6 +92,10 @@ export struct Reader {
         index: index,
         invokeHandler: new ModuleHost(),
         askHandler: SmwQueryEngine.get(),
+        onProgress: (done: number, total: number): void => {
+          this.progressDone = done;
+          this.progressTotal = total;
+        },
       };
       const engine = new TemplateEngine(ctx);
       const expanded = await engine.expand(raw);
@@ -254,14 +262,26 @@ export struct Reader {
       .backgroundColor('#ffffff')
 
       if (this.loading) {
-        Column({ space: 8 }) {
-          LoadingProgress()
-            .width(40)
-            .height(40)
-            .color('#2f6fed')
-          Text('加载页面…')
-            .fontSize(13)
-            .fontColor('#8a8a8e')
+        Column({ space: 10 }) {
+          if (this.progressTotal >= 30) {
+            // 大查询：进度条 + 计数
+            Progress({ value: this.progressDone, total: this.progressTotal, type: ProgressType.Linear })
+              .width('70%')
+              .height(6)
+              .color('#2f6fed')
+              .backgroundColor('#e5e5ea')
+            Text(`正在筛选 ${this.progressDone}/${this.progressTotal} 个页面…`)
+              .fontSize(13)
+              .fontColor('#8a8a8e')
+          } else {
+            LoadingProgress()
+              .width(40)
+              .height(40)
+              .color('#2f6fed')
+            Text('加载页面…')
+              .fontSize(13)
+              .fontColor('#8a8a8e')
+          }
         }
         .layoutWeight(1)
         .justifyContent(FlexAlign.Center)

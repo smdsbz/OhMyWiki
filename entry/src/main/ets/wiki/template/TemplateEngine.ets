@@ -23,6 +23,8 @@ export interface TemplateContext {
   askHandler?: AskHandler | null;
   /** 语义属性捕获回调（可选，用于构建属性索引） */
   capture?: (prop: string, value: string) => void;
+  /** 长查询进度回调（可选）：done 已处理页数 / total 候选页数 */
+  onProgress?: (done: number, total: number) => void;
 }
 
 const MAX_DEPTH = 10;
