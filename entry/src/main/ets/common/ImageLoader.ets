@@ -18,20 +18,14 @@ export class ImageLoader {
       return cached;
     }
     const index = AppStore.getActiveIndex();
-    const source = AppStore.getActiveSource();
-    if (index === null || source === null) {
-      return null;
-    }
-    if (!index.imageExists(fileName)) {
-      return null;
-    }
-    const stored = index.resolveImageFileName(fileName);
-    if (stored === null) {
+    if (index === null) {
       return null;
     }
     try {
-      const rel = PathUtil.join(PathUtil.join(index.rootRel, 'images'), stored);
-      const bytes = await source.readBinary(rel);
+      const bytes = await index.readImageBinary(fileName);
+      if (bytes === null) {
+        return null;
+      }
       const ab = bytes.buffer as ArrayBuffer;
       const src = image.createImageSource(ab);
       const info = await src.getImageInfo();

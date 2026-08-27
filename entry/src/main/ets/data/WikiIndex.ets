@@ -27,8 +27,6 @@ export class WikiIndex {
   readonly rootRel: string;
 
   private titleToPath: Map<string, string> = new Map();
-  private imageSet: Set<string> = new Set();
-  private imageNormMap: Map<string, string> = new Map();
   private templateCache: Map<string, string | null> = new Map();
   private loaded: boolean = false;
 
@@ -45,38 +43,26 @@ export class WikiIndex {
     return this.loaded;
   }
 
-  /** 加载索引（manifest.json 优先，缺失则遍历 pages/） */
+  /** 加载索引（manifest.json 优先，缺失则遍历 pages/）。
+   *  图片不做全量清单：按需试探读取（readImageBinary），站点打开零图片成本 */
   async load(): Promise<void> {
     this.titleToPath.clear();
-    this.imageSet.clear();
     const manifestOk = await this.loadManifest();
     if (!manifestOk) {
       await this.walkPages();
-      // 无 manifest 时只能目录枚举图片（有 manifest 则零 IO 复用 ns=6 条目）
-      await this.loadImagesFromDir();
-    } else {
-      this.loadImagesFromManifest();
     }
     this.loaded = true;
-    Logger.info(TAG, 'index loaded: ' + this.titleToPath.size + ' pages, ' + this.imageSet.size + ' images');
+    Logger.info(TAG, 'index loaded: ' + this.titleToPath.size + ' pages');
   }
-
-  /** manifest ns=6 条目派生的图片名（loadManifest 时顺手收集） */
-  private manifestImages: string[] = [];
 
   private async loadManifest(): Promise<boolean> {
     try {
       const relPath = this.rel('manifest.json');
       const text = await this.source.readText(relPath);
       const arr = JSON.parse(text) as ManifestEntry[];
-      const prefix = '文件:';
       for (const e of arr) {
         if (e.path && e.title) {
           this.titleToPath.set(this.normalizeTitle(e.title), 'pages/' + e.path);
-          // ns=6 文件页 → 图片名（免 images 目录递归枚举，省 3s+）
-          if (e.ns === 6 && e.title.startsWith(prefix)) {
-            this.manifestImages.push(e.title.substring(prefix.length));
-          }
         }
       }
       return true;
@@ -111,40 +97,50 @@ export class WikiIndex {
     }
   }
 
-  /** 图片清单：复用 manifest ns=6 条目（零 IO，替代递归枚举 5508 项的 3s+） */
-  private loadImagesFromManifest(): void {
-    for (const base of this.manifestImages) {
-      this.imageSet.add(base);
-      const norm = this.normalizeImageName(base);
-      if (!this.imageNormMap.has(norm)) {
-        this.imageNormMap.set(norm, base);
+  /** 图片试探结果缓存：引用名 → 实际命中文件名（null = 确认缺失）。
+   *  候选覆盖旧规范化表全部命中形态：原名 / 冒号空格斜杠→下划线（任务图 94 张此形态）/ 首字母互换 */
+  private imageResolveCache: Map<string, string | null> = new Map();
+
+  /** 懒加载读取图片字节：按需试探 images/ 下候选名，全失败返回 null（占位）。结果缓存不重试 */
+  async readImageBinary(fileName: string): Promise<Uint8Array | null> {
+    const base = fileName.split('/').pop() ?? fileName;
+    if (base.length === 0) {
+      return null;
+    }
+    const cached = this.imageResolveCache.get(base);
+    if (cached === null) {
+      return null;
+    }
+    const candidates: string[] = [];
+    if (cached !== undefined) {
+      candidates.push(cached);
+    } else {
+      // 候选：① 原名 ② 冒号/空格/斜杠→下划线（MediaWiki 存储形态）③①② 的首字母大小写互换
+      const under = base.replace(/[:\s/]+/g, '_');
+      const first = under.charAt(0);
+      const swapped = first >= 'a' && first <= 'z'
+        ? first.toUpperCase() + under.substring(1)
+        : (first >= 'A' && first <= 'Z' ? first.toLowerCase() + under.substring(1) : '');
+      candidates.push(base);
+      if (under !== base) {
+        candidates.push(under);
+      }
+      if (swapped.length > 0 && swapped !== base && swapped !== under) {
+        candidates.push(swapped);
       }
     }
-    Logger.info(TAG, 'loadImages: from manifest, ' + this.imageSet.size + ' images');
-  }
-
-  private async loadImagesFromDir(): Promise<void> {
-    const files = await this.source.listAllFiles(this.rel('images'));
-    for (const f of files) {
-      const idx = f.lastIndexOf('/');
-      const base = idx >= 0 ? f.substring(idx + 1) : f;
-      if (base.length > 0) {
-        this.imageSet.add(base);
-        const norm = this.normalizeImageName(base);
-        if (!this.imageNormMap.has(norm)) {
-          this.imageNormMap.set(norm, base);
-        }
+    for (const cand of candidates) {
+      try {
+        const rel = PathUtil.join(PathUtil.join(this.rootRel, 'images'), cand);
+        const bytes = await this.source.readBinary(rel);
+        this.imageResolveCache.set(base, cand);
+        return bytes;
+      } catch (e) {
+        // 试下一个候选
       }
     }
-  }
-
-  /** MediaWiki 文件名规范化：冒号(子页前缀)/空格/斜杠 → 下划线；首字母大小写不敏感（统一小写） */
-  private normalizeImageName(name: string): string {
-    const n = name.trim().replace(/[:\s/]+/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '');
-    if (n.length === 0) {
-      return n;
-    }
-    return n.charAt(0).toLowerCase() + n.substring(1);
+    this.imageResolveCache.set(base, null);
+    return null;
   }
 
   /** 标题规范化（下划线→空格、首字母大小写兼容） */
@@ -210,13 +206,8 @@ export class WikiIndex {
   }
 
   imageExists(fileName: string): boolean {
-    return this.resolveImageFileName(fileName) !== null;
-  }
-
-  /** 把 wiki 引用文件名解析为 images/ 下实际存储的文件名（找不到返回 null） */
-  resolveImageFileName(fileName: string): string | null {
-    const base = fileName.split('/').pop() ?? '';
-    return this.imageNormMap.get(this.normalizeImageName(base)) ?? null;
+    // 懒加载改造后不再维护全量清单；仅同步判定缓存已知结果，未知返回 true（由 readImageBinary 实际探测）
+    return this.imageResolveCache.get(fileName.split('/').pop() ?? fileName) !== null;
   }
 
   /** 读取页面原始 wikitext */
