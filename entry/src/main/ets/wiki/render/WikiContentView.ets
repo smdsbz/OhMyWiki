@@ -20,6 +20,25 @@ interface TableRowPair {
   ri: number;
 }
 
+/** 富文本 Span：文本片段（可带链接） */
+interface RichSpan {
+  text: string;
+  bold: boolean;
+  italic: boolean;
+  link: boolean;
+  target: string;
+}
+
+/** 行内渲染段：连续 text/link 合并为一个 rich 段（单个 Text 内多 Span，支持段内自然换行） */
+interface InlineSeg {
+  kind: string; // 'rich' | 'image' | 'placeholder' | 'break'
+  spans?: RichSpan[];
+  fileName?: string;
+  width?: number;
+  align?: string;
+  reason?: string;
+}
+
 /** 行数达到该阈值的表格自动显示搜索框（任务/物品等 #ask 查询大表） */
 const TABLE_FILTER_MIN_ROWS = 10;
 
@@ -357,7 +376,8 @@ export struct WikiContentView {
 
   @Builder
   renderTable(node: WikiNode, tKey: string) {
-    Column() {
+    if ((node.children ?? []).length > 0) {
+      Column() {
       if (node.caption !== undefined && (node.caption as WikiNode[]).length > 0) {
         Text() {
           this.renderSpans(node.caption as WikiNode[])
@@ -422,14 +442,15 @@ export struct WikiContentView {
         .margin({ top: 8, bottom: 8 })
         .width('100%')
       }
+      }
+      .width('100%')
+      .alignItems(HorizontalAlign.Start)
     }
-    .width('100%')
-    .alignItems(HorizontalAlign.Start)
   }
 
   /** 表格是否含 rowspan 单元格（需要 Grid 显式跨行渲染） */
   private hasRowSpan(node: WikiNode): boolean {
-    const rows = node.children ?? [];
+    const rows = (node.children ?? []) as WikiNode[];
     for (let r = 0; r < rows.length; r++) {
       const cells = (rows[r] as WikiNode).children ?? [];
       for (let c = 0; c < cells.length; c++) {
@@ -444,7 +465,7 @@ export struct WikiContentView {
   /** 展平表格为 (cell,row) 列表，供 Grid 渲染 */
   private flattenCells(node: WikiNode): TableCellItem[] {
     const out: TableCellItem[] = [];
-    const rows = node.children ?? [];
+    const rows = (node.children ?? []) as WikiNode[];
     for (let r = 0; r < rows.length; r++) {
       const cells = (rows[r] as WikiNode).children ?? [];
       for (let c = 0; c < cells.length; c++) {
@@ -456,7 +477,7 @@ export struct WikiContentView {
 
   private tableCols(node: WikiNode): number {
     let max = 0;
-    const rows = node.children ?? [];
+    const rows = (node.children ?? []) as WikiNode[];
     for (let r = 0; r < rows.length; r++) {
       const cells = (rows[r] as WikiNode).children ?? [];
       for (let c = 0; c < cells.length; c++) {
@@ -480,7 +501,7 @@ export struct WikiContentView {
   }
 
   private rowsTemplate(node: WikiNode): string {
-    const n = (node.children ?? []).length;
+    const n = ((node.children ?? []) as WikiNode[]).length;
     let t = '';
     for (let k = 0; k < n; k++) {
       t += (k > 0 ? ' ' : '') + '1fr';
@@ -502,7 +523,7 @@ export struct WikiContentView {
 
   /** 估算表格高度（vp）：按行内容，rowspan 单元格高度分摊到每行；预留图标标签(caption)高度 */
   private gridHeightVp(node: WikiNode): number {
-    const rows = node.children ?? [];
+    const rows = (node.children ?? []) as WikiNode[];
     let total = 0;
     for (let r = 0; r < rows.length; r++) {
       let rh = 68;
@@ -612,59 +633,148 @@ export struct WikiContentView {
   @Builder
   renderInlineFlow(inline: WikiNode[], prefix: string) {
     Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Baseline }) {
-      if (prefix.length > 0) {
-        Text(prefix)
-          .fontSize(15)
-          .lineHeight(22)
-          .fontColor('#3a3a3c')
-      }
-      this.renderRuns(this.buildRuns(inline, 0))
+      this.renderSegments(this.buildSegments(inline, prefix))
     }
     .width('100%')
   }
 
+  /** 把 run 列表分组成渲染段：连续 text/link/break 合并为单个 rich 段（一个 Text 多 Span，
+   *  换行发生在文字内部而非元素边界，修复"链接/标号独占一行"）；<br> 忠实渲染为换行，
+   *  以 Span('\n') 并入同一 Text（仅调整换行的渲染方式，不改数据语义）；图片/占位保持独立段 */
+  private buildSegments(inline: WikiNode[], prefix: string): InlineSeg[] {
+    const runs = this.buildRuns(inline, 0);
+    const segs: InlineSeg[] = [];
+    let buf: RichSpan[] = [];
+    const flushRich = (): void => {
+      if (buf.length > 0) {
+        segs.push({ kind: 'rich', spans: this.normalizeSpans(buf) });
+        buf = [];
+      }
+    };
+    for (const r of runs) {
+      if (r.kind === 'text' || r.kind === 'link') {
+        const isLink = r.kind === 'link';
+        const spans = this.flattenRich(r.inline ?? [], r.style, isLink, isLink ? (r.target ?? '') : '');
+        for (const s of spans) {
+          buf.push(s);
+        }
+      } else if (r.kind === 'break') {
+        // <br>：并入当前 rich 段为换行符（同一 Text 内换行，行高一致）
+        buf.push({ text: '\n', bold: false, italic: false, link: false, target: '' });
+      } else {
+        flushRich();
+        if (r.kind === 'image') {
+          segs.push({ kind: 'image', fileName: r.fileName, width: r.width, align: r.align });
+        } else if (r.kind === 'placeholder') {
+          segs.push({ kind: 'placeholder', reason: r.reason });
+        } else if (r.kind === 'break') {
+          segs.push({ kind: 'break' });
+        }
+      }
+    }
+    flushRich();
+    // 列表标号并入首个 rich 段（避免标号单独占一行）
+    if (prefix.length > 0) {
+      const mk: RichSpan = { text: prefix, bold: false, italic: false, link: false, target: '' };
+      const first = segs.length > 0 ? segs[0] : null;
+      if (first !== null && first.kind === 'rich' && first.spans !== undefined) {
+        first.spans.unshift(mk);
+      } else {
+        segs.unshift({ kind: 'rich', spans: [mk] });
+      }
+    }
+    return segs;
+  }
+
+  /** 合并相邻同样式 Span（仅结构归并，文本内容忠实于源数据——空格等原样保留） */
+  private normalizeSpans(spans: RichSpan[]): RichSpan[] {
+    const merged: RichSpan[] = [];
+    for (const s of spans) {
+      const last = merged.length > 0 ? merged[merged.length - 1] : null;
+      if (last !== null && last.bold === s.bold && last.italic === s.italic &&
+        last.link === s.link && last.target === s.target) {
+        last.text += s.text;
+      } else {
+        merged.push({ text: s.text, bold: s.bold, italic: s.italic, link: s.link, target: s.target });
+      }
+    }
+    return merged;
+  }
+
+  /** 展平行内节点为富文本 Span（保留链接标记与样式） */
+  private flattenRich(inline: WikiNode[], style: number, link: boolean, target: string): RichSpan[] {
+    const out: RichSpan[] = [];
+    const bold = (style & 1) !== 0;
+    const italic = (style & 2) !== 0;
+    for (const tok of inline) {
+      const t = tok.type;
+      if (t === NodeType.Text) {
+        out.push({ text: tok.text ?? '', bold: bold, italic: italic, link: link, target: target });
+      } else if (t === NodeType.Bold || t === NodeType.Italic || t === NodeType.BoldItalic) {
+        let cs = style;
+        if (t === NodeType.Bold || t === NodeType.BoldItalic) {
+          cs |= 1;
+        }
+        if (t === NodeType.Italic || t === NodeType.BoldItalic) {
+          cs |= 2;
+        }
+        const sub = this.flattenRich(tok.inline ?? [], cs, link, target);
+        for (const s of sub) {
+          out.push(s);
+        }
+      } else if (t === NodeType.Link) {
+        const sub = this.flattenRich(tok.inline ?? [], style, true, tok.target ?? '');
+        for (const s of sub) {
+          out.push(s);
+        }
+      } else {
+        out.push({ text: tok.text ?? '', bold: bold, italic: italic, link: link, target: target });
+      }
+    }
+    return out;
+  }
+
   @Builder
-  renderRuns(runs: InlineRun[]) {
-    ForEach(runs, (run: InlineRun, idx: number) => {
-      if (run.kind === 'text') {
+  renderSegments(segs: InlineSeg[]) {
+    ForEach(segs, (seg: InlineSeg, idx: number) => {
+      if (seg.kind === 'rich') {
         Text() {
-          this.renderSpans(run.inline ?? [])
+          ForEach(seg.spans ?? [], (sp: RichSpan, si: number) => {
+            Span(sp.text)
+              .fontWeight(sp.bold ? FontWeight.Bold : FontWeight.Normal)
+              .fontStyle(sp.italic ? FontStyle.Italic : FontStyle.Normal)
+              .fontColor(sp.link ? '#2f6fed' : '#3a3a3c')
+              .decoration(sp.link
+                ? { type: TextDecorationType.Underline, color: '#2f6fed' }
+                : { type: TextDecorationType.None })
+              .onClick(() => {
+                if (sp.link && sp.target.length > 0) {
+                  this.onNavigate(sp.target);
+                }
+              })
+          }, (sp: RichSpan, si: number) => 'sp' + idx + '_' + si)
         }
         .fontSize(15)
         .lineHeight(22)
-        .fontColor('#3a3a3c')
-        .fontWeight((run.style & 1) !== 0 ? FontWeight.Bold : FontWeight.Normal)
-        .fontStyle((run.style & 2) !== 0 ? FontStyle.Italic : FontStyle.Normal)
-      } else if (run.kind === 'link') {
-        Text() {
-          this.renderSpans(run.inline ?? [])
-        }
-        .fontSize(15)
-        .lineHeight(22)
-        .fontColor('#2f6fed')
-        .decoration({ type: TextDecorationType.Underline, color: '#2f6fed' })
-        .onClick(() => {
-          this.onNavigate(run.target ?? '')
-        })
-      } else if (run.kind === 'image') {
-        if (run.align === 'center') {
+      } else if (seg.kind === 'image') {
+        if (seg.align === 'center') {
           Column() {
-            WikiImage({ fileName: run.fileName ?? '', fileWidth: run.width ?? 0, block: true })
+            WikiImage({ fileName: seg.fileName ?? '', fileWidth: seg.width ?? 0, block: true })
           }
           .width('100%')
           .alignItems(HorizontalAlign.Center)
         } else {
-          WikiImage({ fileName: run.fileName ?? '', fileWidth: run.width ?? 0, block: false })
+          WikiImage({ fileName: seg.fileName ?? '', fileWidth: seg.width ?? 0, block: false })
         }
-      } else if (run.kind === 'placeholder') {
-        Text('⚠ ' + (run.reason ?? '内容暂不支持渲染'))
+      } else if (seg.kind === 'placeholder') {
+        Text('⚠ ' + (seg.reason ?? '内容暂不支持渲染'))
           .fontSize(12)
           .fontColor('#8a6d1a')
           .padding({ left: 8, right: 8, top: 4, bottom: 4 })
           .backgroundColor('#fdf6e3')
           .borderRadius(6)
           .margin({ top: 2, bottom: 2 })
-      } else if (run.kind === 'break') {
+      } else if (seg.kind === 'break') {
         Column() {
         }
         .width('100%')
@@ -672,7 +782,7 @@ export struct WikiContentView {
       } else {
         Text('')
       }
-    }, (run: InlineRun, idx: number) => 'r' + idx)
+    }, (seg: InlineSeg, idx: number) => 'seg' + idx)
   }
 
   /** 把行内节点展平为带样式的文本片段 */
