@@ -928,6 +928,7 @@ export class WikitextParser {
       return null;
     }
     let width: number | undefined;
+    let height: number | undefined;
     let align: string | undefined;
     let link: string | undefined;
     let caption: string | null = null;
@@ -943,10 +944,10 @@ export class WikitextParser {
           width = parseInt(w[1]);
           continue;
         }
-        // x400px：高度限定（MediaWiki 语法），按宽度近似处理
+        // x400px：高度限定（MediaWiki 语法）
         const wh = opt.match(/^x(\d+)px$/);
         if (wh !== null) {
-          width = parseInt(wh[1]);
+          height = parseInt(wh[1]);
           continue;
         }
         if (opt === 'center' || opt === '居中') {
@@ -980,6 +981,7 @@ export class WikitextParser {
       type: NodeType.FileImage,
       fileName: fileName,
       fileWidth: width,
+      fileHeight: height,
       fileAlign: align,
       fileLink: link,
     };

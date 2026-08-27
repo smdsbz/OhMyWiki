@@ -84,6 +84,8 @@ export interface WikiNode {
   fileName?: string;
   /** 图片宽度（px） */
   fileWidth?: number;
+  /** 图片高度（px，x400px 限高注释） */
+  fileHeight?: number;
   /** 图片对齐：left/center/right */
   fileAlign?: string;
   /** 图片点击链接目标标题 */

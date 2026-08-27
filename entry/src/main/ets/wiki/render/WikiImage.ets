@@ -9,12 +9,16 @@ import { ImageLoader } from '../../common/ImageLoader';
 export struct WikiImage {
   /** 图片文件名（images/ 下） */
   fileName: string = '';
-  /** 期望宽度（px，0 表示自动/撑满） */
+  /** 期望宽度（px，0 表示自动/铺满） */
   fileWidth: number = 0;
+  /** 期望高度（px，x400px 限高注释；0 表示不限） */
+  fileHeight: number = 0;
   /** 是否占满整行（块级图片） */
   block: boolean = false;
   @State pm: image.PixelMap | null = null;
   @State failed: boolean = false;
+  /** 原图宽高比（width/height），用于铺满宽时按比例定高 */
+  @State ratio: number = 0;
 
   aboutToAppear(): void {
     this.load();
@@ -24,6 +28,14 @@ export struct WikiImage {
     const result = await ImageLoader.load(this.fileName);
     if (result !== null) {
       this.pm = result;
+      try {
+        const info = await result.getImageInfo();
+        if (info.size.height > 0) {
+          this.ratio = info.size.width / info.size.height;
+        }
+      } catch (e) {
+        this.ratio = 0;
+      }
     } else {
       this.failed = true;
     }
@@ -36,6 +48,15 @@ export struct WikiImage {
     // wiki 的 px 是密度无关单位（等同 vp），不能再用 px2vp 缩小；钳制到屏幕宽度避免溢出
     const screenVp = px2vp(display.getDefaultDisplaySync().width);
     return Math.min(this.fileWidth, screenVp);
+  }
+
+  /** 限高注释（x400px）下的显示宽度：高固定×比例，钳制到屏宽；非限高返回 0 */
+  private heightLimitedWidthVp(): number {
+    if (this.fileHeight <= 0 || this.fileWidth > 0 || this.ratio <= 0) {
+      return 0;
+    }
+    const screenVp = px2vp(display.getDefaultDisplaySync().width);
+    return Math.min(this.fileHeight * this.ratio, screenVp);
   }
 
   build() {
@@ -53,10 +74,27 @@ export struct WikiImage {
       .margin({ top: 6, bottom: 6 })
     } else if (this.pm !== null) {
       if (this.block) {
-        if (this.widthVp() > 0) {
+        // 宽度注释优先（屏幕不够时钳制到屏宽）；其次高度限定；都无注释则居中铺满容器宽
+        if (this.heightLimitedWidthVp() > 0) {
+          // 限高注释（x400px）：高度固定，宽度按比例（同时不超出屏宽）
+          Image(this.pm as image.PixelMap)
+            .width(this.heightLimitedWidthVp())
+            .aspectRatio(this.ratio)
+            .objectFit(ImageFit.Fill)
+            .margin({ top: 6, bottom: 6 })
+        } else if (this.widthVp() > 0) {
+          // 宽度注释：按注释宽度（widthVp 已钳制屏宽）
           Image(this.pm as image.PixelMap)
             .width(this.widthVp())
-            .objectFit(ImageFit.Contain)
+            .aspectRatio(this.ratio > 0 ? this.ratio : 1)
+            .objectFit(ImageFit.Fill)
+            .margin({ top: 6, bottom: 6 })
+        } else if (this.ratio > 0) {
+          // 无注释：铺满容器宽，按原图比例定高
+          Image(this.pm as image.PixelMap)
+            .width('100%')
+            .aspectRatio(this.ratio)
+            .objectFit(ImageFit.Fill)
             .margin({ top: 6, bottom: 6 })
         } else {
           Image(this.pm as image.PixelMap)

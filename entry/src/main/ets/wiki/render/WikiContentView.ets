@@ -9,6 +9,7 @@ interface InlineRun {
   target?: string;
   fileName?: string;
   width?: number;
+  height?: number;
   align?: string;
   reason?: string;
   style: number; // 1=bold 2=italic
@@ -35,6 +36,7 @@ interface InlineSeg {
   spans?: RichSpan[];
   fileName?: string;
   width?: number;
+  height?: number;
   align?: string;
   reason?: string;
 }
@@ -225,6 +227,7 @@ export struct WikiContentView {
           kind: 'image',
           fileName: tok.fileName,
           width: tok.fileWidth,
+          height: tok.fileHeight,
           align: tok.fileAlign,
           style: style,
         });
@@ -548,7 +551,7 @@ export struct WikiContentView {
     if (this.isSingleImage(cell.inline ?? [])) {
       Column() {
         WikiImage({ fileName: (cell.inline as WikiNode[])[0].fileName ?? '',
-          fileWidth: this.gridIconVp(cell.rowSpan !== undefined ? cell.rowSpan : 1), block: true })
+          fileWidth: this.gridIconVp(cell.rowSpan !== undefined ? cell.rowSpan : 1), block: false })
         if ((cell.inline as WikiNode[])[0].caption !== undefined &&
           ((cell.inline as WikiNode[])[0].caption as WikiNode[]).length > 0) {
           Text() {
@@ -600,7 +603,8 @@ export struct WikiContentView {
   @Builder
   renderImageNode(node: WikiNode) {
     Column() {
-      WikiImage({ fileName: node.fileName ?? '', fileWidth: node.fileWidth ?? 0, block: true })
+      WikiImage({ fileName: node.fileName ?? '', fileWidth: node.fileWidth ?? 0,
+        fileHeight: node.fileHeight ?? 0, block: true })
       if (node.caption !== undefined && (node.caption as WikiNode[]).length > 0) {
         Text() {
           this.renderSpans(node.caption as WikiNode[])
@@ -664,7 +668,7 @@ export struct WikiContentView {
       } else {
         flushRich();
         if (r.kind === 'image') {
-          segs.push({ kind: 'image', fileName: r.fileName, width: r.width, align: r.align });
+          segs.push({ kind: 'image', fileName: r.fileName, width: r.width, height: r.height, align: r.align });
         } else if (r.kind === 'placeholder') {
           segs.push({ kind: 'placeholder', reason: r.reason });
         } else if (r.kind === 'break') {
@@ -759,12 +763,15 @@ export struct WikiContentView {
       } else if (seg.kind === 'image') {
         if (seg.align === 'center') {
           Column() {
-            WikiImage({ fileName: seg.fileName ?? '', fileWidth: seg.width ?? 0, block: true })
+            WikiImage({ fileName: seg.fileName ?? '', fileWidth: seg.width ?? 0,
+              fileHeight: seg.height ?? 0, block: true })
           }
           .width('100%')
           .alignItems(HorizontalAlign.Center)
         } else {
-          WikiImage({ fileName: seg.fileName ?? '', fileWidth: seg.width ?? 0, block: false })
+          // 无宽度标注的图片（如任务缩略图 [[文件:xxx|无]]）铺满内容宽度
+          WikiImage({ fileName: seg.fileName ?? '', fileWidth: seg.width ?? 0,
+            fileHeight: seg.height ?? 0, block: true })
         }
       } else if (seg.kind === 'placeholder') {
         Text('⚠ ' + (seg.reason ?? '内容暂不支持渲染'))
