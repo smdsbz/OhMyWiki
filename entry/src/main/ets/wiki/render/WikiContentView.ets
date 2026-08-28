@@ -622,14 +622,22 @@ export struct WikiContentView {
 
   @Builder
   renderPlaceholder(node: WikiNode) {
-    Text('⚠ ' + (node.reason ?? '内容暂不支持渲染'))
-      .fontSize(12)
-      .fontColor('#8a6d1a')
-      .padding({ left: 10, right: 10, top: 6, bottom: 6 })
-      .backgroundColor('#fdf6e3')
-      .borderRadius(6)
-      .width('100%')
-      .margin({ top: 4, bottom: 4 })
+    if ((node.reason ?? '').startsWith('ASK:')) {
+      // 渐进渲染：查询后台执行中的占位
+      Text('⏳ 数据加载中…')
+        .fontSize(12)
+        .fontColor('#6b7f99')
+        .padding({ left: 8, right: 8, top: 2, bottom: 2 })
+    } else {
+      Text('⚠ ' + (node.reason ?? '内容暂不支持渲染'))
+        .fontSize(12)
+        .fontColor('#8a6d1a')
+        .padding({ left: 10, right: 10, top: 6, bottom: 6 })
+        .backgroundColor('#fdf6e3')
+        .borderRadius(6)
+        .width('100%')
+        .margin({ top: 4, bottom: 4 })
+    }
   }
 
   // ---------- 行内渲染 ----------

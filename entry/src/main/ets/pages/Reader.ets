@@ -1,7 +1,8 @@
 import { AppStore } from '../common/AppStore';
 import { Logger } from '../common/Logger';
+import { WikiIndex } from '../data/WikiIndex';
 import { WikiNode } from '../model/WikiTypes';
-import { TemplateEngine, TemplateContext } from '../wiki/template/TemplateEngine';
+import { TemplateEngine, TemplateContext, PendingAsk, PLACEHOLDER_MARK } from '../wiki/template/TemplateEngine';
 import { SmwQueryEngine } from '../wiki/smw/SmwQueryEngine';
 import { WikitextParser } from '../wiki/parser/WikitextParser';
 import { WikiContentView } from '../wiki/render/WikiContentView';
@@ -25,6 +26,8 @@ export struct Reader {
   @State loading: boolean = true;
   @State errorMsg: string = '';
   @State pageSeq: number = 0;
+  /** 渐进渲染阶段 2 协程令牌：递增使旧协程失效 */
+  private askRunId: number = 0;
   @State progressDone: number = 0;
   @State progressTotal: number = 0;
   private redirectDepth: number = 0;
@@ -86,15 +89,14 @@ export struct Reader {
       }
       this.redirectDepth = 0;
 
+      const pending: PendingAsk[] = [];
       const ctx: TemplateContext = {
         pageTitle: title,
         index: index,
         invokeHandler: AppStore.getActiveInvokeHandler(),
         askHandler: SmwQueryEngine.get(),
-        onProgress: (done: number, total: number): void => {
-          this.progressDone = done;
-          this.progressTotal = total;
-        },
+        lazyAsk: true,
+        pendingAsks: pending,
       };
       const engine = new TemplateEngine(ctx);
       const expanded = await engine.expand(raw);
@@ -108,11 +110,50 @@ export struct Reader {
       this.nodes = nodes;
       this.loading = false;
       this.pageSeq++;
+      // 阶段 2：后台执行惰性登记的查询，完成后回填刷新（渐进渲染）
+      if (pending.length > 0) {
+        this.runPendingAsks(title, index, expanded, pending);
+      }
     } catch (e) {
       Logger.error(TAG, 'loadPage error: ' + JSON.stringify(e));
       this.errorMsg = '渲染失败：' + JSON.stringify(e);
       this.loading = false;
     }
+  }
+
+  /** 渐进渲染阶段 2：后台逐条执行惰性 #ask/#show，回填占位标记后一次性重新渲染。
+   *  askRunId 防重入：用户跳转到新页后旧协程丢弃结果 */
+  private async runPendingAsks(title: string, index: WikiIndex, expanded: string,
+    pending: PendingAsk[]): Promise<void> {
+    this.askRunId++;
+    const runId = this.askRunId;
+    let text = expanded;
+    const ctx: TemplateContext = {
+      pageTitle: title,
+      index: index,
+      invokeHandler: AppStore.getActiveInvokeHandler(),
+      askHandler: SmwQueryEngine.get(),
+    };
+    for (const pa of pending) {
+      if (this.askRunId !== runId) {
+        return;
+      }
+      let result = '';
+      try {
+        result = await SmwQueryEngine.get().query(pa.args, ctx, pa.isShow);
+      } catch (e) {
+        Logger.warn(TAG, 'pending ask failed #' + pa.id + ' ' + JSON.stringify(e));
+      }
+      const mark = PLACEHOLDER_MARK + 'ASK:' + pa.id + '\u0000';
+      text = text.split(mark).join(result);
+    }
+    if (this.askRunId !== runId) {
+      return;
+    }
+    const parser = new WikitextParser(index, title);
+    this.nodes = parser.parse(text);
+    this.pageSeq++;
+    Logger.info(TAG, 'runPendingAsks [' + title + '] done, asks=' + pending.length);
   }
 
   /** 跳转到 wiki 页面：压入新 NavDestination，自带转场动画且新页从顶部开始 */

@@ -21,6 +21,10 @@ interface DisplayProp {
 interface AskQuery {
   /** 命名空间前缀过滤（如 '任务:'），null 表示不限 */
   nsPrefix: string | null;
+  /** 裸页面名条件（如 [[Ver.1.1.0]]）：候选集 = 该单页 */
+  pageTitle: string | null;
+  /** format=template 的模板名（template= 参数） */
+  templateName: string;
   /** 属性过滤（AND） */
   propFilters: PropFilter[];
   /** 展示属性（?属性=标签） */
@@ -87,6 +91,12 @@ export class SmwQueryEngine implements AskHandler {
         if (reportProgress && ((ti + 1) % 20 === 0 || ti === titles.length - 1)) {
           ctx.onProgress!(ti + 1, titles.length);
         }
+        // 定期让出主线程：防止同步展开段连续执行饿死渲染/输入（THREAD_BLOCK 根治）
+        if ((ti + 1) % 50 === 0 && ti !== titles.length - 1) {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 0);
+          });
+        }
       }
       Logger.info(TAG, 'query: titles=' + titles.length + ' matched=' + rows.length +
         ' ns=' + q.nsPrefix + ' filters=' + JSON.stringify(q.propFilters));
@@ -94,7 +104,7 @@ export class SmwQueryEngine implements AskHandler {
       if (q.limit > 0 && rows.length > q.limit) {
         rows.length = q.limit;
       }
-      return this.render(rows, q, ctx.index);
+      return await this.render(rows, q, ctx.index, ctx);
     } catch (e) {
       Logger.warn(TAG, 'query error: ' + JSON.stringify(e));
       return '';
@@ -190,6 +200,8 @@ export class SmwQueryEngine implements AskHandler {
   private parseQuery(args: string[]): AskQuery {
     const q: AskQuery = {
       nsPrefix: null,
+      pageTitle: null,
+      templateName: '',
       propFilters: [],
       displayProps: [],
       sortProps: [],
@@ -247,6 +259,8 @@ export class SmwQueryEngine implements AskHandler {
             q.headersPlain = val.toLowerCase() === 'plain';
           } else if (key === 'format') {
             q.format = val.toLowerCase();
+          } else if (key === 'template') {
+            q.templateName = val;
           }
         }
       }
@@ -273,12 +287,20 @@ export class SmwQueryEngine implements AskHandler {
       }
       return;
     }
-    // 其他条件（分类等）暂不支持，忽略
+    // 裸页面名条件 [[页面名]]：候选集 = 该单页（避免退化为全站扫描）
+    const trimmed = inner.trim();
+    if (trimmed.length > 0 && !trimmed.startsWith('Category:') && !trimmed.startsWith('分类:')) {
+      q.pageTitle = trimmed;
+    }
   }
 
   private collectTitles(q: AskQuery, ctx: TemplateContext): string[] {
     if (ctx.index === null) {
       return [];
+    }
+    // 裸名单页条件优先：候选 = 1 页
+    if (q.pageTitle !== null) {
+      return ctx.index.pageExists(q.pageTitle) ? [q.pageTitle] : [];
     }
     if (q.nsPrefix !== null) {
       return ctx.index.titlesByPrefix(q.nsPrefix);
@@ -388,7 +410,30 @@ export class SmwQueryEngine implements AskHandler {
     return 0;
   }
 
-  private render(rows: Row[], q: AskQuery, index: WikiIndex | null): string {
+  private async render(rows: Row[], q: AskQuery, index: WikiIndex | null,
+    ctx: TemplateContext): Promise<string> {
+    // format=template：每行数据传给指定模板展开（如 {{日期(游戏版本)|更新日期=…}}）
+    if (q.format === 'template' && q.templateName.length > 0 && ctx !== null) {
+      const eng = new TemplateEngine(ctx);
+      const out: string[] = [];
+      for (const r of rows) {
+        const parts: string[] = [q.templateName];
+        if (q.mainLabel.length > 0) {
+          parts.push(q.mainLabel + '=' + r.title);
+        } else {
+          // 无 mainlabel：按 SMW unnamed 语义传位置参数（模板 {{{1}}} = 页面名）
+          parts.push(r.title);
+        }
+        for (const dp of q.displayProps) {
+          const values = r.props.get(dp.prop);
+          if (values !== undefined && values.length > 0) {
+            parts.push((dp.label.length > 0 ? dp.label : dp.prop) + '=' + values.join('、'));
+          }
+        }
+        out.push(await eng.expand('{{' + parts.join('|') + '}}'));
+      }
+      return out.join('\n');
+    }
     if (q.format === 'list' || q.format === 'ul') {
       const sb: string[] = [];
       for (const r of rows) {

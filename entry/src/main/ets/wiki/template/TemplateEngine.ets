@@ -14,6 +14,13 @@ export interface AskHandler {
   query(args: string[], ctx: TemplateContext, isShow: boolean): Promise<string>;
 }
 
+/** 惰性登记的 #ask/#show（渐进渲染：Reader 后台执行后回填占位标记） */
+export interface PendingAsk {
+  id: number;
+  args: string[];
+  isShow: boolean;
+}
+
 /** 模板展开上下文 */
 export interface TemplateContext {
   pageTitle: string;
@@ -25,6 +32,10 @@ export interface TemplateContext {
   capture?: (prop: string, value: string) => void;
   /** 长查询进度回调（可选）：done 已处理页数 / total 候选页数 */
   onProgress?: (done: number, total: number) => void;
+  /** 惰性 #ask/#show（渐进渲染）：不立即执行，登记到 pendingAsks 并返回占位标记 */
+  lazyAsk?: boolean;
+  /** 惰性模式下的查询登记表（由页面持有，阶段 2 逐条执行） */
+  pendingAsks?: PendingAsk[];
 }
 
 const MAX_DEPTH = 10;
@@ -37,6 +48,8 @@ export const PLACEHOLDER_MARK = '\u0000OMPH:';
  */
 export class TemplateEngine {
   private ctx: TemplateContext;
+  /** 惰性 #ask/#show 全局自增 id */
+  private static askSeq = 0;
 
   constructor(ctx: TemplateContext) {
     this.ctx = ctx;
@@ -327,6 +340,16 @@ export class TemplateEngine {
       return this.placeholder('Lua 模块 ' + module + ' 未实现');
     }
     if (fname === '#ask' || fname === '#show') {
+      // 渐进渲染：惰性模式登记不执行，返回占位标记（Reader 阶段 2 执行后回填）。
+      //  仅限顶层（depth 0）：嵌套在解析函数参数内（如 {{#expr:{{#show:…}}*2}}）必须同步执行，
+      //  否则占位文本被当数值解析（价格变 0）
+      if (depth === 0 && this.ctx.lazyAsk === true &&
+        this.ctx.pendingAsks !== undefined && this.ctx.pendingAsks !== null) {
+        TemplateEngine.askSeq++;
+        const pa: PendingAsk = { id: TemplateEngine.askSeq, args: args, isShow: fname === '#show' };
+        this.ctx.pendingAsks.push(pa);
+        return PLACEHOLDER_MARK + 'ASK:' + pa.id + '\u0000';
+      }
       if (this.ctx.askHandler !== undefined && this.ctx.askHandler !== null) {
         return await this.ctx.askHandler.query(args, this.ctx, fname === '#show');
       }
