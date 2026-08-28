@@ -64,12 +64,12 @@ export struct WikiImage {
       Column() {
         Text('⚠ 图片缺失')
           .fontSize(12)
-          .fontColor('#b0b0b4')
+          .fontColor($r('app.color.img_missing_text'))
       }
       .width('100%')
       .height(80)
       .justifyContent(FlexAlign.Center)
-      .backgroundColor('#f0f0f2')
+      .backgroundColor($r('app.color.img_missing_bg'))
       .borderRadius(6)
       .margin({ top: 6, bottom: 6 })
     } else if (this.pm !== null) {
@@ -113,12 +113,12 @@ export struct WikiImage {
       Column() {
         Text('加载中…')
           .fontSize(12)
-          .fontColor('#b0b0b4')
+          .fontColor($r('app.color.img_missing_text'))
       }
       .width(this.widthVp() > 0 ? this.widthVp() : 160)
       .height(80)
       .justifyContent(FlexAlign.Center)
-      .backgroundColor('#f5f5f7')
+      .backgroundColor($r('app.color.surface_deep'))
       .borderRadius(6)
       .margin({ top: 6, bottom: 6 })
     }

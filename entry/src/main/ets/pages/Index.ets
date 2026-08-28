@@ -170,13 +170,13 @@ struct Index {
         Text('OhMyWiki')
           .fontSize(24)
           .fontWeight(FontWeight.Bold)
-          .fontColor('#1c1c1e')
+          .fontColor($r('app.color.text_primary'))
         Blank()
         Button('导入')
           .height(36)
           .fontSize(14)
-          .fontColor('#2f6fed')
-          .backgroundColor('#e8f0fe')
+          .fontColor($r('app.color.link'))
+          .backgroundColor($r('app.color.accent_bg'))
           .margin({ right: 8 })
           .enabled(!this.importing)
           .onClick(() => {
@@ -185,24 +185,24 @@ struct Index {
         Button('刷新')
           .height(36)
           .fontSize(14)
-          .backgroundColor('#2f6fed')
+          .backgroundColor($r('app.color.link'))
           .onClick(() => {
             this.refresh();
           })
       }
       .width('100%')
       .padding({ left: 16, right: 16, top: 12, bottom: 12 })
-      .backgroundColor('#ffffff')
+      .backgroundColor($r('app.color.page_bg'))
 
       if (this.loading) {
         Column({ space: 8 }) {
           LoadingProgress()
             .width(40)
             .height(40)
-            .color('#2f6fed')
+            .color($r('app.color.link'))
           Text('正在扫描 Wiki 数据…')
             .fontSize(14)
-            .fontColor('#8a8a8e')
+            .fontColor($r('app.color.text_tertiary'))
         }
         .layoutWeight(1)
         .justifyContent(FlexAlign.Center)
@@ -210,18 +210,18 @@ struct Index {
         Column({ space: 12 }) {
           Text(this.importMsg)
             .fontSize(14)
-            .fontColor('#8a8a8e')
+            .fontColor($r('app.color.text_tertiary'))
           Progress({ value: this.importProgress, total: 100, type: ProgressType.Linear })
             .width('70%')
-            .color('#2f6fed')
-            .backgroundColor('#e8f0fe')
+            .color($r('app.color.link'))
+            .backgroundColor($r('app.color.accent_bg'))
           Text(this.importProgress + '%')
             .fontSize(13)
-            .fontColor('#2f6fed')
+            .fontColor($r('app.color.link'))
           if (this.importFileName.length > 0) {
             Text(this.importFileName)
               .fontSize(11)
-              .fontColor('#8a8a8e')
+              .fontColor($r('app.color.text_tertiary'))
               .maxLines(1)
               .textOverflow({ overflow: TextOverflow.Ellipsis })
               .width('70%')
@@ -235,7 +235,7 @@ struct Index {
             if (this.errorMsg.length > 0) {
               Text(this.errorMsg)
                 .fontSize(13)
-                .fontColor('#d0021b')
+                .fontColor($r('app.color.error'))
                 .padding(12)
             }
 
@@ -244,7 +244,7 @@ struct Index {
             } else {
               Text(`共发现 ${this.sites.length} 个 Wiki 数据文件夹`)
                 .fontSize(13)
-                .fontColor('#8a8a8e')
+                .fontColor($r('app.color.text_tertiary'))
                 .width('100%')
                 .padding({ left: 16, right: 16 })
 
@@ -256,7 +256,7 @@ struct Index {
             if (this.importMsg.length > 0) {
               Text(this.importMsg)
                 .fontSize(13)
-                .fontColor(this.importMsg.startsWith('导入失败') ? '#d0021b' : '#2f6fed')
+                .fontColor(this.importMsg.startsWith('导入失败') ? $r('app.color.error') : $r('app.color.link'))
                 .width('100%')
                 .padding({ left: 16, right: 16, top: 4 })
             }
@@ -271,7 +271,7 @@ struct Index {
       }
       .width('100%')
       .height('100%')
-      .backgroundColor('#f2f3f5')
+      .backgroundColor($r('app.color.surface'))
     }
     .mode(NavigationMode.Stack)
     .hideTitleBar(true)
@@ -297,12 +297,12 @@ struct Index {
           Text(item.site.displayName)
             .fontSize(17)
             .fontWeight(FontWeight.Medium)
-            .fontColor('#1c1c1e')
+            .fontColor($r('app.color.text_primary'))
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
           Text(item.site.name)
             .fontSize(12)
-            .fontColor('#8a8a8e')
+            .fontColor($r('app.color.text_tertiary'))
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
         }
@@ -311,9 +311,9 @@ struct Index {
 
         Text(this.sourceBadgeText())
           .fontSize(11)
-          .fontColor('#2f6fed')
+          .fontColor($r('app.color.link'))
           .padding({ left: 8, right: 8, top: 3, bottom: 3 })
-          .backgroundColor('#e8f0fe')
+          .backgroundColor($r('app.color.accent_bg'))
           .borderRadius(10)
       }
       .width('100%')
@@ -321,7 +321,7 @@ struct Index {
       if (item.site.totalPages > 0) {
         Text(`${item.site.totalPages} 个页面`)
           .fontSize(12)
-          .fontColor('#8a8a8e')
+          .fontColor($r('app.color.text_tertiary'))
           .margin({ top: 6 })
       }
 
@@ -329,14 +329,14 @@ struct Index {
         Blank()
         Text('打开 ›')
           .fontSize(14)
-          .fontColor('#2f6fed')
+          .fontColor($r('app.color.link'))
       }
       .width('100%')
       .margin({ top: 8 })
     }
     .width('100%')
     .padding(16)
-    .backgroundColor('#ffffff')
+    .backgroundColor($r('app.color.page_bg'))
     .borderRadius(12)
     .onClick(() => {
       this.openSite(item);
@@ -349,12 +349,12 @@ struct Index {
       Text('未找到 Wiki 数据')
         .fontSize(18)
         .fontWeight(FontWeight.Bold)
-        .fontColor('#1c1c1e')
+        .fontColor($r('app.color.text_primary'))
         .margin({ top: 32 })
 
       Text('把 wiki 数据文件夹放进公共下载目录，每个顶层文件夹即一个 MediaWiki 站点（含 pages/ 与 images/）。')
         .fontSize(14)
-        .fontColor('#3a3a3c')
+        .fontColor($r('app.color.text_body'))
         .textAlign(TextAlign.Start)
         .lineHeight(22)
         .padding({ left: 24, right: 24 })
@@ -368,8 +368,8 @@ struct Index {
         Button('授权访问公共下载目录')
           .height(48)
           .fontSize(16)
-          .fontColor('#ffffff')
-          .backgroundColor('#2f6fed')
+          .fontColor($r('app.color.page_bg'))
+          .backgroundColor($r('app.color.link'))
           .borderRadius(24)
           .padding({ left: 24, right: 24 })
           .onClick(() => {
@@ -399,18 +399,18 @@ struct Index {
       Text(title)
         .fontSize(15)
         .fontWeight(FontWeight.Medium)
-        .fontColor('#1c1c1e')
+        .fontColor($r('app.color.text_primary'))
         .width('100%')
       Text(body)
         .fontSize(13)
-        .fontColor('#5a5a5e')
+        .fontColor($r('app.color.text_secondary'))
         .lineHeight(20)
         .width('100%')
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start)
     .padding(14)
-    .backgroundColor('#ffffff')
+    .backgroundColor($r('app.color.page_bg'))
     .borderRadius(10)
   }
 }

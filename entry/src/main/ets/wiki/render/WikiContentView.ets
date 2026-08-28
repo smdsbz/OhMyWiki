@@ -270,7 +270,7 @@ export struct WikiContentView {
       }
       .fontSize(this.headingSize(node.level ?? 2))
       .fontWeight(FontWeight.Bold)
-      .fontColor('#1c1c1e')
+      .fontColor($r('app.color.text_primary'))
       .width('100%')
       .lineHeight(this.headingSize(node.level ?? 2) + 8)
       .margin({ top: 14, bottom: 6 })
@@ -289,7 +289,7 @@ export struct WikiContentView {
         this.renderInlineFlow(node.inline ?? [], '')
       }
     } else if (node.type === NodeType.Hr) {
-      Divider().color('#d8d8dc').margin({ top: 10, bottom: 10 })
+      Divider().color($r('app.color.table_border')).margin({ top: 10, bottom: 10 })
     } else if (node.type === NodeType.UnorderedList) {
       Column({ space: 4 }) {
         ForEach(node.children ?? [], (item: WikiNode, idx: number) => {
@@ -325,8 +325,8 @@ export struct WikiContentView {
       Text(node.text ?? '')
         .fontFamily('monospace')
         .fontSize(12)
-        .fontColor('#3a3a3c')
-        .backgroundColor('#f5f5f7')
+        .fontColor($r('app.color.text_body'))
+        .backgroundColor($r('app.color.surface_deep'))
         .padding(10)
         .width('100%')
         .borderRadius(6)
@@ -346,15 +346,15 @@ export struct WikiContentView {
         this.renderSpans(node.inline ?? [])
       }
       .fontSize(15)
-      .fontColor('#2f6fed')
-      .decoration({ type: TextDecorationType.Underline, color: '#2f6fed' })
+      .fontColor($r('app.color.link'))
+      .decoration({ type: TextDecorationType.Underline, color: $r('app.color.link') })
       .onClick(() => {
         this.onNavigate(node.target ?? '')
       })
     } else if (node.type === NodeType.Text) {
-      Text(node.text ?? '').fontSize(15).fontColor('#3a3a3c')
+      Text(node.text ?? '').fontSize(15).fontColor($r('app.color.text_body'))
     } else {
-      Text(node.text ?? '').fontSize(15).fontColor('#3a3a3c')
+      Text(node.text ?? '').fontSize(15).fontColor($r('app.color.text_body'))
     }
   }
 
@@ -386,7 +386,7 @@ export struct WikiContentView {
         }
         .fontSize(13)
         .fontWeight(FontWeight.Medium)
-        .fontColor('#5a5a5e')
+        .fontColor($r('app.color.text_secondary'))
         .margin({ top: 6, bottom: 2 })
       }
       if (this.tableFilterable(node)) {
@@ -397,7 +397,7 @@ export struct WikiContentView {
             .height(38)
             .fontSize(14)
             .padding({ left: 12, right: 12 })
-            .backgroundColor('#f2f2f7')
+            .backgroundColor($r('app.color.surface'))
             .borderRadius(10)
             .onChange((v: string) => {
               this.setTableFilter(tKey, v);
@@ -405,10 +405,10 @@ export struct WikiContentView {
           if (this.tableFilterOf(tKey).length > 0) {
             Text((this.visibleRows(node, tKey).length - 1) + '/' + ((node.children ?? []).length - 1))
               .fontSize(12)
-              .fontColor('#8a8a8e')
+              .fontColor($r('app.color.text_tertiary'))
             Text('✕')
               .fontSize(14)
-              .fontColor('#8a8a8e')
+              .fontColor($r('app.color.text_tertiary'))
               .padding(6)
               .onClick(() => {
                 this.clearTableFilter(tKey);
@@ -431,15 +431,15 @@ export struct WikiContentView {
                 }
                 .layoutWeight(cell.colSpan ?? 1)
                 .padding(6)
-                .backgroundColor(cell.type === NodeType.TableHeaderCell ? '#eef1f6' : '#ffffff')
-                .border({ width: 1, color: '#d5d8dd' })
+                .backgroundColor(cell.type === NodeType.TableHeaderCell ? $r('app.color.table_header_bg') : $r('app.color.table_bg'))
+                .border({ width: 1, color: $r('app.color.table_border') })
                 .alignItems(HorizontalAlign.Start)
               }, (cell: WikiNode, cIdx: number) => 'cell' + item.ri + '_' + cIdx)
             }
             .width('100%')
           }, (item: TableRowPair, vIdx: number) => 'frow_' + item.ri)
         }
-        .border({ width: 1, color: '#c5c8cd' })
+        .border({ width: 1, color: $r('app.color.table_border_outer') })
         .borderRadius(4)
         .margin({ top: 8, bottom: 8 })
         .width('100%')
@@ -557,7 +557,7 @@ export struct WikiContentView {
             this.renderSpans((cell.inline as WikiNode[])[0].caption as WikiNode[])
           }
           .fontSize(12)
-          .fontColor('#8a8a8e')
+          .fontColor($r('app.color.text_tertiary'))
           .textAlign(TextAlign.Center)
           .margin({ top: 2 })
         }
@@ -583,8 +583,8 @@ export struct WikiContentView {
           .alignItems(HorizontalAlign.Center)
           .padding(4)
         }
-        .backgroundColor(item.cell.type === NodeType.TableHeaderCell ? '#eef1f6' : '#ffffff')
-        .border({ width: 1, color: '#c5c8cd' })
+        .backgroundColor(item.cell.type === NodeType.TableHeaderCell ? $r('app.color.table_header_bg') : $r('app.color.table_bg'))
+        .border({ width: 1, color: $r('app.color.table_border_outer') })
         .rowStart(item.row)
         .rowEnd(item.row + (item.cell.rowSpan ?? 1) - 1)
         .columnStart(item.cell.colIndex ?? 0)
@@ -609,7 +609,7 @@ export struct WikiContentView {
           this.renderSpans(node.caption as WikiNode[])
         }
         .fontSize(12)
-        .fontColor('#8a8a8e')
+        .fontColor($r('app.color.text_tertiary'))
         .textAlign(TextAlign.Center)
         .margin({ top: 2 })
       }
@@ -626,14 +626,14 @@ export struct WikiContentView {
       // 渐进渲染：查询后台执行中的占位
       Text('⏳ 数据加载中…')
         .fontSize(12)
-        .fontColor('#6b7f99')
+        .fontColor($r('app.color.loading_text'))
         .padding({ left: 8, right: 8, top: 2, bottom: 2 })
     } else {
       Text('⚠ ' + (node.reason ?? '内容暂不支持渲染'))
         .fontSize(12)
-        .fontColor('#8a6d1a')
+        .fontColor($r('app.color.warn_text'))
         .padding({ left: 10, right: 10, top: 6, bottom: 6 })
-        .backgroundColor('#fdf6e3')
+        .backgroundColor($r('app.color.warn_bg'))
         .borderRadius(6)
         .width('100%')
         .margin({ top: 4, bottom: 4 })
@@ -757,9 +757,9 @@ export struct WikiContentView {
             Span(sp.text)
               .fontWeight(sp.bold ? FontWeight.Bold : FontWeight.Normal)
               .fontStyle(sp.italic ? FontStyle.Italic : FontStyle.Normal)
-              .fontColor(sp.link ? '#2f6fed' : '#3a3a3c')
+              .fontColor(sp.link ? $r('app.color.link') : $r('app.color.text_body'))
               .decoration(sp.link
-                ? { type: TextDecorationType.Underline, color: '#2f6fed' }
+                ? { type: TextDecorationType.Underline, color: $r('app.color.link') }
                 : { type: TextDecorationType.None })
               .onClick(() => {
                 if (sp.link && sp.target.length > 0) {
@@ -781,9 +781,9 @@ export struct WikiContentView {
       } else if (seg.kind === 'placeholder') {
         Text('⚠ ' + (seg.reason ?? '内容暂不支持渲染'))
           .fontSize(12)
-          .fontColor('#8a6d1a')
+          .fontColor($r('app.color.warn_text'))
           .padding({ left: 8, right: 8, top: 4, bottom: 4 })
-          .backgroundColor('#fdf6e3')
+          .backgroundColor($r('app.color.warn_bg'))
           .borderRadius(6)
           .margin({ top: 2, bottom: 2 })
       } else if (seg.kind === 'break') {

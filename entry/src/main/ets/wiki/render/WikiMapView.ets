@@ -36,18 +36,18 @@ export struct WikiMapView {
       Text(this.title)
         .fontSize(13)
         .fontWeight(FontWeight.Medium)
-        .fontColor('#5a5a5e')
+        .fontColor($r('app.color.text_secondary'))
         .margin({ top: 8, bottom: 4 })
       if (this.failed) {
         Column() {
           Text('⚠ 地图图片缺失：' + this.image)
             .fontSize(12)
-            .fontColor('#b0b0b4')
+            .fontColor($r('app.color.img_missing_text'))
         }
         .width('100%')
         .height(120)
         .justifyContent(FlexAlign.Center)
-        .backgroundColor('#f0f0f2')
+        .backgroundColor($r('app.color.img_missing_bg'))
         .borderRadius(6)
       } else if (this.pm !== null) {
         Stack() {
@@ -89,12 +89,12 @@ export struct WikiMapView {
         Column() {
           Text('地图加载中…')
             .fontSize(12)
-            .fontColor('#b0b0b4')
+            .fontColor($r('app.color.img_missing_text'))
         }
         .width('100%')
         .aspectRatio(this.ratio > 0 ? this.ratio : 1)
         .justifyContent(FlexAlign.Center)
-        .backgroundColor('#f5f5f7')
+        .backgroundColor($r('app.color.surface_deep'))
         .borderRadius(6)
       }
     }

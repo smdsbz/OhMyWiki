@@ -201,7 +201,7 @@ export struct Reader {
           .width(40)
           .height(40)
           .fontSize(24)
-          .fontColor('#1c1c1e')
+          .fontColor($r('app.color.text_primary'))
           .backgroundColor('#00000000')
           .onClick(() => {
             this.back();
@@ -209,7 +209,7 @@ export struct Reader {
         Text(this.displayTitle())
           .fontSize(17)
           .fontWeight(FontWeight.Medium)
-          .fontColor('#1c1c1e')
+          .fontColor($r('app.color.text_primary'))
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .layoutWeight(1)
@@ -218,7 +218,7 @@ export struct Reader {
           Image($r('app.media.ic_home'))
             .width(20)
             .height(20)
-            .fillColor('#1c1c1e')
+            .fillColor($r('app.color.text_primary'))
         }
         .width(40)
         .height(40)
@@ -231,7 +231,7 @@ export struct Reader {
       .width('100%')
       .height(52)
       .padding({ left: 4, right: 4 })
-      .backgroundColor('#ffffff')
+      .backgroundColor($r('app.color.page_bg'))
 
       if (this.loading) {
         Column({ space: 10 }) {
@@ -240,19 +240,19 @@ export struct Reader {
             Progress({ value: this.progressDone, total: this.progressTotal, type: ProgressType.Linear })
               .width('70%')
               .height(6)
-              .color('#2f6fed')
-              .backgroundColor('#e5e5ea')
+              .color($r('app.color.link'))
+              .backgroundColor($r('app.color.surface'))
             Text(`正在筛选 ${this.progressDone}/${this.progressTotal} 个页面…`)
               .fontSize(13)
-              .fontColor('#8a8a8e')
+              .fontColor($r('app.color.text_tertiary'))
           } else {
             LoadingProgress()
               .width(40)
               .height(40)
-              .color('#2f6fed')
+              .color($r('app.color.link'))
             Text('加载页面…')
               .fontSize(13)
-              .fontColor('#8a8a8e')
+              .fontColor($r('app.color.text_tertiary'))
           }
         }
         .layoutWeight(1)
@@ -261,12 +261,12 @@ export struct Reader {
         Column({ space: 10 }) {
           Text(this.errorMsg)
             .fontSize(14)
-            .fontColor('#d0021b')
+            .fontColor($r('app.color.error'))
             .textAlign(TextAlign.Center)
             .padding(20)
           Button('返回首页')
             .fontSize(14)
-            .backgroundColor('#2f6fed')
+            .backgroundColor($r('app.color.link'))
             .onClick(() => {
               this.goHome();
             })
@@ -291,7 +291,7 @@ export struct Reader {
       }
       .width('100%')
       .height('100%')
-      .backgroundColor('#ffffff')
+      .backgroundColor($r('app.color.page_bg'))
     }
     .hideTitleBar(true)
     .onReady((ctx: NavDestinationContext) => {
