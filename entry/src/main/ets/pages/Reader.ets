@@ -2,7 +2,6 @@ import { AppStore } from '../common/AppStore';
 import { Logger } from '../common/Logger';
 import { WikiNode } from '../model/WikiTypes';
 import { TemplateEngine, TemplateContext } from '../wiki/template/TemplateEngine';
-import { ModuleHost } from '../wiki/module/ModuleHost';
 import { SmwQueryEngine } from '../wiki/smw/SmwQueryEngine';
 import { WikitextParser } from '../wiki/parser/WikitextParser';
 import { WikiContentView } from '../wiki/render/WikiContentView';
@@ -90,7 +89,7 @@ export struct Reader {
       const ctx: TemplateContext = {
         pageTitle: title,
         index: index,
-        invokeHandler: new ModuleHost(),
+        invokeHandler: AppStore.getActiveInvokeHandler(),
         askHandler: SmwQueryEngine.get(),
         onProgress: (done: number, total: number): void => {
           this.progressDone = done;
@@ -100,7 +99,7 @@ export struct Reader {
       const engine = new TemplateEngine(ctx);
       const expanded = await engine.expand(raw);
       Logger.info(TAG, 'EXPANDED [' + title + ']:\n' + expanded);
-      const finalText = await this.appendShopLocation(expanded, raw);
+      const finalText = expanded;
       const parser = new WikitextParser(index, title);
       const nodes = parser.parse(finalText);
       Logger.info(TAG, 'loadPage [' + title + '] nodes=' + nodes.length);
@@ -109,10 +108,6 @@ export struct Reader {
       this.nodes = nodes;
       this.loading = false;
       this.pageSeq++;
-      // 首页渲染完成后预热商店索引（延迟：不抢占首帧 IO；幂等）
-      setTimeout(() => {
-        AppStore.warmShopFinder();
-      }, 1500);
     } catch (e) {
       Logger.error(TAG, 'loadPage error: ' + JSON.stringify(e));
       this.errorMsg = '渲染失败：' + JSON.stringify(e);
@@ -143,74 +138,6 @@ export struct Reader {
 
   goHome(): void {
     this.pathStack.popToName('Reader');
-  }
-
-  /** 异刃页增强：在信息框后追加「喜欢的物品获取地点」（商店 + 地区/位置） */
-  private async appendShopLocation(expanded: string, raw: string): Promise<string> {
-    if (raw.indexOf('{{BladeInfo') < 0) {
-      return expanded;
-    }
-    const finder = AppStore.getShopFinder();
-    if (finder === null) {
-      return expanded;
-    }
-    const items: string[] = [];
-    const m1 = raw.match(/\|\s*喜欢的物品1\s*=\s*([^\n|]+)/);
-    if (m1 !== null) {
-      items.push(this.cleanItemName(m1[1]));
-    }
-    const m2 = raw.match(/\|\s*喜欢的物品2\s*=\s*([^\n|]+)/);
-    if (m2 !== null) {
-      items.push(this.cleanItemName(m2[1]));
-    }
-    if (items.length === 0) {
-      return expanded;
-    }
-    let section = '\n== 喜欢的物品获取地点 ==\n';
-    for (const it of items) {
-      if (it.length === 0) {
-        continue;
-      }
-      const shops = await finder.find(it);
-      section += '\n* ' + it + '：';
-      if (shops.length === 0) {
-        section += '未在商店数据中找到';
-        continue;
-      }
-      const parts: string[] = [];
-      for (const s of shops) {
-        const ci = s.title.indexOf(':');
-        const name = ci >= 0 ? s.title.substring(ci + 1) : s.title;
-        const locParts: string[] = [];
-        if (s.region.length > 0) {
-          locParts.push(s.region);
-        }
-        if (s.location.length > 0) {
-          locParts.push(s.location);
-        }
-        const loc = locParts.length > 0 ? '（' + locParts.join('・') + '）' : '';
-        parts.push('[[' + s.title + '|' + name + ']]' + loc);
-      }
-      section += parts.join('／');
-    }
-    section += '\n';
-    // 插到第一个二级标题前（信息框之后）；没有标题则追加到末尾
-    const hi = expanded.indexOf('\n==');
-    if (hi >= 0) {
-      return expanded.substring(0, hi) + section + expanded.substring(hi);
-    }
-    return expanded + '\n' + section;
-  }
-
-  /** 清洗 BladeInfo 参数值（去 wikilink / 模板包裹） */
-  private cleanItemName(v: string): string {
-    let s = v.trim();
-    const m = s.match(/\[\[([^\]|]*)/);
-    if (m !== null) {
-      s = m[1];
-    }
-    s = s.replace(/\{\{[^}]*\}\}/g, '').trim();
-    return s;
   }
 
   private displayTitle(): string {

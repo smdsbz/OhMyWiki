@@ -194,7 +194,7 @@ export class WikiIndex {
     return this.findPath(title) !== null;
   }
 
-  /** 列出以指定前缀开头的页面标题（如 '商店:'） */
+  /** 列出以指定前缀开头的页面标题（如 'Category:'、'Help:'） */
   titlesByPrefix(prefix: string): string[] {
     const out: string[] = [];
     for (const t of this.titleToPath.keys()) {

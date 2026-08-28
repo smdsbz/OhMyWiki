@@ -312,9 +312,9 @@ export struct WikiContentView {
       this.renderListItem(node, node.type === NodeType.Indent ? '　' : '• ', 0, tKey + 'i')
     } else if (node.type === NodeType.Table) {
       this.renderTable(node, tKey + 't')
-    } else if (node.type === NodeType.EnemyMap) {
+    } else if (node.type === NodeType.Map) {
       WikiMapView({
-        area: node.mapArea ?? '',
+        image: node.mapImage ?? '',
         title: node.mapTitle ?? '',
         ratio: node.mapRatio ?? 1,
         markers: node.mapMarkers ?? [],

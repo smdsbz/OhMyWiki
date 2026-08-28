@@ -4,12 +4,14 @@ import { Logger } from './Logger';
 import { PathUtil } from '../data/DataSource';
 import { PublicDirSource } from '../data/PublicDirSource';
 import { WikiIndex } from '../data/WikiIndex';
-import { ShopFinder } from '../data/ShopFinder';
+import { SmwQueryEngine } from '../wiki/smw/SmwQueryEngine';
 import { ZipExtractor, ProgressCallback } from '../data/ZipExtractor';
 import { WikiSite } from '../model/WikiTypes';
 import { DataSource } from '../data/DataSource';
-import { SmwQueryEngine } from '../wiki/smw/SmwQueryEngine';
 import { JsonDataReader } from '../wiki/module/JsonDataReader';
+import { InvokeHandler } from '../wiki/template/TemplateEngine';
+import { SiteAdapter, SiteAdapterFactory } from '../wiki/siteadapter/SiteAdapter';
+import { RakuenSiteAdapter } from '../wiki/siteadapter/rakuen/RakuenSiteAdapter';
 
 const TAG = 'AppStore';
 
@@ -23,14 +25,15 @@ export class AppStore {
   private static activeSource: DataSource | null = null;
   private static activeSite: WikiSite | null = null;
   private static activeIndex: WikiIndex | null = null;
-  private static shopFinder: ShopFinder | null = null;
-  private static shopFinderKey: string = '';
+  private static activeAdapter: SiteAdapter | null = null;
 
   static init(context: common.UIAbilityContext): void {
     if (AppStore.ctx !== null) {
       return;
     }
     AppStore.ctx = context;
+    // 站点适配包挂载点：新站点在此注册（引擎不 import 任何具体适配器）
+    SiteAdapterFactory.register(new RakuenSiteAdapter());
     AppStore.sources = [];
     AppStore.sources.push(new PublicDirSource(context));
     Logger.info(TAG, 'AppStore initialized (public download)');
@@ -170,25 +173,9 @@ export class AppStore {
     return SmwQueryEngine.get();
   }
 
-  /** 获取当前站点的商店索引（懒构建 + 缓存，站点切换时重建） */
-  static getShopFinder(): ShopFinder | null {
-    if (AppStore.activeIndex === null || AppStore.activeSite === null) {
-      return null;
-    }
-    const key = AppStore.activeSite.sourceKey + '/' + AppStore.activeSite.name;
-    if (AppStore.shopFinder === null || AppStore.shopFinderKey !== key) {
-      AppStore.shopFinder = new ShopFinder(AppStore.activeIndex);
-      AppStore.shopFinderKey = key;
-    }
-    return AppStore.shopFinder;
-  }
-
-  /** 预热商店索引（首页渲染完后延迟调用，避免 87 页扫描抢占首页加载 IO） */
-  static warmShopFinder(): void {
-    if (AppStore.activeIndex === null) {
-      return;
-    }
-    AppStore.getShopFinder()?.warm();
+  /** 获取当前站点的 #invoke 处理器（站点适配器提供；无适配能力的站点返回 null → 占位） */
+  static getActiveInvokeHandler(): InvokeHandler | null {
+    return AppStore.activeAdapter !== null ? AppStore.activeAdapter.createInvokeHandler() : null;
   }
 
   /** 发现所有可用站点（遍历各数据源的顶层文件夹） */
@@ -226,10 +213,7 @@ export class AppStore {
     const idx = new WikiIndex(src, site.rootRel);
     await idx.load();
     AppStore.activeIndex = idx;
-    // 商店索引懒创建（不预热：87 页扫描会与首页加载抢 IO，改为首页渲染后 warmShopFinder 延迟触发）
-    AppStore.shopFinder = null;
-    AppStore.shopFinderKey = '';
-    AppStore.getShopFinder();
+    AppStore.activeAdapter = SiteAdapterFactory.forSite(site);
     // 站点切换：清空 SMW 属性缓存与 JSON 数据缓存
     SmwQueryEngine.get().clear();
     JsonDataReader.clear();

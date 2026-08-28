@@ -3,13 +3,13 @@ import { ImageLoader } from '../../common/ImageLoader';
 import { MapMarker } from '../../model/WikiTypes';
 
 /**
- * 敌人地图位置组件：底图（<区域>_map_0.png）+ 红点标记。
- * 标记坐标为相对底图的百分比（由 Mapinfo 世界坐标换算而来）。
+ * 地图组件：按给定底图文件名渲染 + 百分比标记（引擎不感知底图命名规则）。
+ * 标记坐标为相对底图的百分比。
  */
 @Component
 export struct WikiMapView {
-  /** 地图区域名（Mapinfo Name，如 ma02a_f01） */
-  area: string = '';
+  /** 底图文件名（由模块输出时拼好） */
+  image: string = '';
   /** 标题（mapName・menuGroup） */
   title: string = '';
   /** 底图宽高比 */
@@ -23,22 +23,12 @@ export struct WikiMapView {
   }
 
   async load(): Promise<void> {
-    const imgName = this.imageFileName();
-    const result = await ImageLoader.load(imgName);
+    const result = await ImageLoader.load(this.image);
     if (result !== null) {
       this.pm = result;
     } else {
       this.failed = true;
     }
-  }
-
-  /** 底图文件名：区域名首字母大写 + _map_0.png（如 Ma02a_f01_map_0.png） */
-  private imageFileName(): string {
-    const a = this.area;
-    if (a.length === 0) {
-      return '';
-    }
-    return a.charAt(0).toUpperCase() + a.substring(1) + '_map_0.png';
   }
 
   build() {
@@ -50,7 +40,7 @@ export struct WikiMapView {
         .margin({ top: 8, bottom: 4 })
       if (this.failed) {
         Column() {
-          Text('⚠ 地图图片缺失：' + this.imageFileName())
+          Text('⚠ 地图图片缺失：' + this.image)
             .fontSize(12)
             .fontColor('#b0b0b4')
         }

@@ -76,16 +76,16 @@ export class WikitextParser {
     return t.length > 0 && (t.charAt(0) === '*' || t.charAt(0) === '#' || t.charAt(0) === ';' || t.charAt(0) === ':');
   }
 
-  /** 解析敌人地图行：@@ENEMYMAP|区域|标题|宽|高|left,top;left,top...@@ */
-  private parseEnemyMapLine(line: string): WikiNode | null {
+  /** 解析地图行：@@WIKIMAP|底图文件名|标题|宽|高|left,top;left,top...@@ */
+  private parseMapLine(line: string): WikiNode | null {
     try {
-      const body = line.substring('@@ENEMYMAP|'.length, line.length - 2);
+      const body = line.substring('@@WIKIMAP|'.length, line.length - 2);
       const parts = body.split('|');
       if (parts.length < 5) {
         return null;
       }
-      const area = parts[0];
-      const title = parts[1];
+      const image = parts[0].trim();
+      const title = parts[1].trim();
       const w = parseFloat(parts[2]);
       const h = parseFloat(parts[3]);
       const markers: MapMarker[] = [];
@@ -97,12 +97,12 @@ export class WikitextParser {
           }
         }
       }
-      if (area.length === 0 || isNaN(w) || isNaN(h) || h <= 0 || markers.length === 0) {
+      if (image.length === 0 || isNaN(w) || isNaN(h) || h <= 0 || markers.length === 0) {
         return null;
       }
       const node: WikiNode = {
-        type: NodeType.EnemyMap,
-        mapArea: area,
+        type: NodeType.Map,
+        mapImage: image,
         mapTitle: title,
         mapRatio: w / h,
         mapMarkers: markers,
@@ -164,10 +164,10 @@ export class WikitextParser {
         i++;
         continue;
       }
-      // 敌人地图：@@ENEMYMAP|区域|标题|宽|高|left,top;left,top...@@
-      if (trimmed.startsWith('@@ENEMYMAP|') && trimmed.endsWith('@@')) {
+      // 地图：@@WIKIMAP|底图文件名|标题|宽|高|left,top;left,top...@@（模块输出的通用协议）
+      if (trimmed.startsWith('@@WIKIMAP|') && trimmed.endsWith('@@')) {
         flush();
-        const node = this.parseEnemyMapLine(trimmed);
+        const node = this.parseMapLine(trimmed);
         if (node !== null) {
           out.push(node);
         }

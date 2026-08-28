@@ -1,6 +1,6 @@
-import { Logger } from '../../common/Logger';
-import { TemplateContext, PLACEHOLDER_MARK } from '../template/TemplateEngine';
-import { JsonDataReader } from './JsonDataReader';
+import { Logger } from '../../../common/Logger';
+import { TemplateContext, PLACEHOLDER_MARK } from '../../template/TemplateEngine';
+import { JsonDataReader } from '../../module/JsonDataReader';
 
 const TAG = 'EnemyModule';
 
@@ -273,63 +273,8 @@ export class EnemyModule {
   }
 
   /**
-   * 快速属性提取（敌人命名空间 #ask 专用）：
-   * 页面名 → EnemyIdMap → id → CHR_EnArrange/{id}（ZoneID/等级）→ FLD_maplist/{ZoneID}（地域）。
-   * 每敌人仅 1 次 IO（CHR_EnArrange），地名表按区域缓存；跳过六维/抗性/被动/地图等展示计算。
-   * 与 renderMain/captureSmw 同源同判定（lookupId 首个 id、EnemyCategory 默认普通敌人）。
-   * 返回 null 表示无法解析，调用方回退完整展开路径。
-   */
-  static async propsFast(ctx: TemplateContext, title: string): Promise<Map<string, string[]> | null> {
-    try {
-      if (ctx.index === null) {
-        return null;
-      }
-      let name = title;
-      const ci = name.indexOf(':');
-      if (ci >= 0) {
-        name = name.substring(ci + 1);
-      }
-      name = name.trim();
-      if (name.length === 0) {
-        return null;
-      }
-      const id = await EnemyModule.lookupId(ctx, name);
-      if (id <= 0) {
-        return null;
-      }
-      const arrange = await JsonDataReader.read(ctx, 'CHR_EnArrange/' + id) as EnArrangeJson | null;
-      if (arrange === null) {
-        return null;
-      }
-      const props = new Map<string, string[]>();
-      const set = (p: string, v: string): void => {
-        if (v.length > 0) {
-          props.set(p, [v]);
-        }
-      };
-      const categoryMap = await JsonDataReader.read(ctx, 'EnemyCategory') as Record<string, string> | null;
-      const category = categoryMap !== null && categoryMap[String(id)] !== undefined ? categoryMap[String(id)] : '普通敌人';
-      set('ZoneID', String(arrange.ZoneID));
-      set('敌人分类', category);
-      if (arrange.ZoneID > 0) {
-        const fl = await JsonDataReader.read(ctx, 'FLD_maplist/' + arrange.ZoneID) as Record<string, Object> | null;
-        if (fl !== null && fl.nameID !== undefined) {
-          set('地域', String(fl.nameID));
-        }
-      }
-      set('等级', String(arrange.Lv));
-      set('等级浮动', String(arrange.LvRand ?? 0));
-      set('无视等级差补正', arrange.IgnoreLevPow ? '✔' : '✘');
-      return props;
-    } catch (e) {
-      Logger.warn(TAG, 'propsFast error: ' + JSON.stringify(e));
-      return null;
-    }
-  }
-
-  /**
    * 构建地图位置段：EnemyGmkMap → Gmk/enemy 坐标 → Mapinfo 世界范围 → 百分比标记。
-   * 输出 `@@ENEMYMAP|区域|标题|宽|高|left,top;...@@` 行，由 WikitextParser 转 EnemyMap 节点。
+   * 输出 `@@WIKIMAP|底图文件名|标题|宽|高|left,top;...@@` 行，由 WikitextParser 转 Map 节点。
    * 打捞/召唤敌人无地面放置点，跳过（对应原站的"出现方式"）。
    */
   private static async buildMapSection(ctx: TemplateContext, id: number, category: string): Promise<string> {
@@ -404,7 +349,8 @@ export class EnemyModule {
         }
         const title = (info.mapName ?? '') + (info.menuGroup !== undefined && info.menuGroup.length > 0 &&
           info.menuGroup !== info.mapName ? '・' + info.menuGroup : '');
-        sb.push('@@ENEMYMAP|' + area + '|' + title + '|' + info.Width + '|' + info.Height +
+        sb.push('@@WIKIMAP|' + (area.charAt(0).toUpperCase() + area.substring(1) + '_map_0.png') +
+          '|' + title + '|' + info.Width + '|' + info.Height +
           '|' + marks.join(';') + '@@');
       }
       if (sb.length <= 1) {

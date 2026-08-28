@@ -4,7 +4,7 @@ import { BraceUtil } from '../parser/BraceUtil';
 
 const TAG = 'TemplateEngine';
 
-/** #invoke 分发接口（由 ModuleHost 实现） */
+/** #invoke 分发接口（由站点适配器提供实现） */
 export interface InvokeHandler {
   invoke(module: string, func: string, args: string[], ctx: TemplateContext): Promise<string>;
 }
@@ -662,7 +662,7 @@ export class TemplateEngine {
   }
 
   /** 模板源码清理：注释、noinclude 移除、includeonly 标签剥离（内容保留）。
-   * 容错：站点转储存在未闭合的 <includeonly>（如 ShopGoodsPouchItemRow 尾部笔误），
+   * 容错：转储中可能存在未闭合的 <includeonly> 标签，
    * MediaWiki 对未闭合标签按“延伸到文末”处理，等价于直接剥标签保内容。 */
   private cleanSource(src: string): string {
     let s = src.replace(/<!--[\s\S]*?-->/g, '');

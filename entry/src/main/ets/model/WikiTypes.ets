@@ -52,7 +52,8 @@ export enum NodeType {
   Placeholder = 'placeholder',
   Container = 'container',
   /** 敌人地图位置（底图 + 标记点） */
-  EnemyMap = 'enemyMap',
+  /** 通用地图节点（模块输出 @@WIKIMAP 协议行） */
+  Map = 'map',
 }
 
 /** 地图标记点（相对底图的百分比坐标） */
@@ -103,7 +104,8 @@ export interface WikiNode {
   /** 单元格列位置（解析表格时按 rowspan 占位计算） */
   colIndex?: number;
   /** 地图区域名（对应 Mapinfo Name，如 ma02a_f01） */
-  mapArea?: string;
+  /** 地图底图文件名（由模块输出时拼好，引擎不感知站点命名规则） */
+  mapImage?: string;
   /** 地图标题（mapName・menuGroup） */
   mapTitle?: string;
   /** 地图宽高比（宽/高） */
