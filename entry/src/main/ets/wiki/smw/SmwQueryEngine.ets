@@ -56,6 +56,9 @@ export class SmwQueryEngine implements AskHandler {
   /** 页面标题 → 属性表（懒构建 + 缓存） */
   private propCache: Map<string, Map<string, string[]>> = new Map();
 
+  /** 在途属性提取（title → Promise）：并发扫描同一页时共享一次展开，避免重复读盘+模板展开 */
+  private propPending: Map<string, Promise<Map<string, string[]>>> = new Map();
+
   static get(): SmwQueryEngine {
     if (SmwQueryEngine.instance === null) {
       SmwQueryEngine.instance = new SmwQueryEngine();
@@ -66,6 +69,7 @@ export class SmwQueryEngine implements AskHandler {
   /** 站点切换时清空缓存 */
   clear(): void {
     this.propCache.clear();
+    this.propPending.clear();
   }
 
   async query(args: string[], ctx: TemplateContext, isShow: boolean = false): Promise<string> {
@@ -90,6 +94,11 @@ export class SmwQueryEngine implements AskHandler {
         // 进度回报：每 20 页或最后一页（Reader 侧 total≥30 才展示进度条）
         if (reportProgress && ((ti + 1) % 20 === 0 || ti === titles.length - 1)) {
           ctx.onProgress!(ti + 1, titles.length);
+        }
+        // 页面已销毁（用户退出）：立即中止扫描，不再消耗 CPU
+        if (ctx.cancelled !== undefined && ctx.cancelled() === true) {
+          Logger.info(TAG, 'query cancelled at ' + (ti + 1) + '/' + titles.length);
+          return '';
         }
         // 定期让出主线程：防止同步展开段连续执行饿死渲染/输入（THREAD_BLOCK 根治）
         if ((ti + 1) % 50 === 0 && ti !== titles.length - 1) {
@@ -308,8 +317,27 @@ export class SmwQueryEngine implements AskHandler {
     return ctx.index.titlesByPrefix('');
   }
 
-  /** 提取页面语义属性（模板展开 + 捕获 [[属性::值]] / {{#set:...}}），带缓存 */
-  private async extractProps(title: string, ctx: TemplateContext): Promise<Map<string, string[]>> {
+  /** 提取页面语义属性（模板展开 + 捕获 [[属性::值]] / {{#set:...}}），带缓存 + 在途去重 */
+  private extractProps(title: string, ctx: TemplateContext): Promise<Map<string, string[]>> {
+    const cached = this.propCache.get(title);
+    if (cached !== undefined) {
+      return Promise.resolve(cached);
+    }
+    const inflight = this.propPending.get(title);
+    if (inflight !== undefined) {
+      return inflight;
+    }
+    const p = this.extractPropsUncached(title, ctx);
+    this.propPending.set(title, p);
+    p.then((): void => {
+      this.propPending.delete(title);
+    }, (): void => {
+      this.propPending.delete(title);
+    });
+    return p;
+  }
+
+  private async extractPropsUncached(title: string, ctx: TemplateContext): Promise<Map<string, string[]>> {
     const cached = this.propCache.get(title);
     if (cached !== undefined) {
       return cached;

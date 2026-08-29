@@ -36,6 +36,8 @@ export interface TemplateContext {
   lazyAsk?: boolean;
   /** 惰性模式下的查询登记表（由页面持有，阶段 2 逐条执行） */
   pendingAsks?: PendingAsk[];
+  /** 取消信号（可选，返回 true 时长查询应尽快中止）：页面销毁后终止后台扫描 */
+  cancelled?: () => boolean;
 }
 
 const MAX_DEPTH = 10;

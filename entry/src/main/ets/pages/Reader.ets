@@ -37,6 +37,11 @@ export struct Reader {
     this.init(this.siteKey, this.siteName);
   }
 
+  /** 页面销毁（pop 返回）时使阶段 2 协程失效，终止后台全站扫描（防孤儿协程堆积） */
+  aboutToDisappear(): void {
+    this.askRunId++;
+  }
+
   async init(siteKey: string, siteName: string): Promise<void> {
     try {
       const ok = await AppStore.openSiteByKeyName(siteKey, siteName);
@@ -133,9 +138,11 @@ export struct Reader {
       index: index,
       invokeHandler: AppStore.getActiveInvokeHandler(),
       askHandler: SmwQueryEngine.get(),
+      cancelled: (): boolean => this.askRunId !== runId,
     };
     for (const pa of pending) {
       if (this.askRunId !== runId) {
+        Logger.info(TAG, 'runPendingAsks [' + title + '] cancelled, ask #' + pa.id + '/' + pending.length);
         return;
       }
       let result = '';
@@ -148,6 +155,7 @@ export struct Reader {
       text = text.split(mark).join(result);
     }
     if (this.askRunId !== runId) {
+      Logger.info(TAG, 'runPendingAsks [' + title + '] cancelled before render');
       return;
     }
     const parser = new WikitextParser(index, title);
