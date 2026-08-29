@@ -30,6 +30,8 @@ export struct Reader {
   private askRunId: number = 0;
   @State progressDone: number = 0;
   @State progressTotal: number = 0;
+  /** 阶段 2（后台 #ask 回填）进行中：顶栏下方显示细进度条 */
+  @State asking: boolean = false;
   private redirectDepth: number = 0;
   private pathStack: NavPathStack = new NavPathStack();
 
@@ -132,6 +134,9 @@ export struct Reader {
     pending: PendingAsk[]): Promise<void> {
     this.askRunId++;
     const runId = this.askRunId;
+    this.asking = true;
+    this.progressDone = 0;
+    this.progressTotal = 0;
     let text = expanded;
     const ctx: TemplateContext = {
       pageTitle: title,
@@ -139,29 +144,37 @@ export struct Reader {
       invokeHandler: AppStore.getActiveInvokeHandler(),
       askHandler: SmwQueryEngine.get(),
       cancelled: (): boolean => this.askRunId !== runId,
+      onProgress: (done: number, total: number): void => {
+        this.progressDone = done;
+        this.progressTotal = total;
+      },
     };
-    for (const pa of pending) {
+    try {
+      for (const pa of pending) {
+        if (this.askRunId !== runId) {
+          Logger.info(TAG, 'runPendingAsks [' + title + '] cancelled, ask #' + pa.id + '/' + pending.length);
+          return;
+        }
+        let result = '';
+        try {
+          result = await SmwQueryEngine.get().query(pa.args, ctx, pa.isShow);
+        } catch (e) {
+          Logger.warn(TAG, 'pending ask failed #' + pa.id + ' ' + JSON.stringify(e));
+        }
+        const mark = PLACEHOLDER_MARK + 'ASK:' + pa.id + '\u0000';
+        text = text.split(mark).join(result);
+      }
       if (this.askRunId !== runId) {
-        Logger.info(TAG, 'runPendingAsks [' + title + '] cancelled, ask #' + pa.id + '/' + pending.length);
+        Logger.info(TAG, 'runPendingAsks [' + title + '] cancelled before render');
         return;
       }
-      let result = '';
-      try {
-        result = await SmwQueryEngine.get().query(pa.args, ctx, pa.isShow);
-      } catch (e) {
-        Logger.warn(TAG, 'pending ask failed #' + pa.id + ' ' + JSON.stringify(e));
-      }
-      const mark = PLACEHOLDER_MARK + 'ASK:' + pa.id + '\u0000';
-      text = text.split(mark).join(result);
+      const parser = new WikitextParser(index, title);
+      this.nodes = parser.parse(text);
+      this.pageSeq++;
+      Logger.info(TAG, 'runPendingAsks [' + title + '] done, asks=' + pending.length);
+    } finally {
+      this.asking = false;
     }
-    if (this.askRunId !== runId) {
-      Logger.info(TAG, 'runPendingAsks [' + title + '] cancelled before render');
-      return;
-    }
-    const parser = new WikitextParser(index, title);
-    this.nodes = parser.parse(text);
-    this.pageSeq++;
-    Logger.info(TAG, 'runPendingAsks [' + title + '] done, asks=' + pending.length);
   }
 
   /** 跳转到 wiki 页面：压入新 NavDestination，自带转场动画且新页从顶部开始 */
@@ -282,21 +295,49 @@ export struct Reader {
         .layoutWeight(1)
         .justifyContent(FlexAlign.Center)
       } else {
-        Scroll() {
-          Column() {
-            WikiContentView({ nodes: this.nodes, renderKey: this.pageSeq, onNavigate: (t: string): void => {
-              this.navigate(t)
-            } })
+        Column() {
+          // 阶段 2 后台查询进度（非阻塞细条，查询期间页面内容仍可阅读/滚动）
+          if (this.asking) {
+            Row({ space: 8 }) {
+              if (this.progressTotal > 0) {
+                Progress({ value: this.progressDone, total: this.progressTotal, type: ProgressType.Linear })
+                  .layoutWeight(1)
+                  .height(4)
+                  .color($r('app.color.link'))
+                  .backgroundColor($r('app.color.accent_bg'))
+                Text(`${this.progressDone}/${this.progressTotal} 页`)
+                  .fontSize(11)
+                  .fontColor($r('app.color.text_tertiary'))
+              } else {
+                LoadingProgress()
+                  .width(16)
+                  .height(16)
+                  .color($r('app.color.link'))
+                Text('正在查询…')
+                  .fontSize(11)
+                  .fontColor($r('app.color.text_tertiary'))
+              }
+            }
+            .width('100%')
+            .padding({ left: 14, right: 14, top: 2, bottom: 2 })
           }
-          .width('100%')
-          .padding({ left: 14, right: 14, top: 8, bottom: 32 })
+          Scroll() {
+            Column() {
+              WikiContentView({ nodes: this.nodes, renderKey: this.pageSeq, onNavigate: (t: string): void => {
+                this.navigate(t)
+              } })
+            }
+            .width('100%')
+            .padding({ left: 14, right: 14, top: 8, bottom: 32 })
+          }
+          .layoutWeight(1)
+          .scrollBar(BarState.Auto)
+          .align(Alignment.Top)
+          .key('page_' + this.pageSeq)
+          // 滚动视口本身延伸到物理屏幕底部：内容从半透明导航条下方滑过
+          .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
         }
         .layoutWeight(1)
-        .scrollBar(BarState.Auto)
-        .align(Alignment.Top)
-        .key('page_' + this.pageSeq)
-        // 滚动视口本身延伸到物理屏幕底部：内容从半透明导航条下方滑过
-        .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
       }
       }
       .width('100%')
