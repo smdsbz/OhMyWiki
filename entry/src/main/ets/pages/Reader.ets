@@ -287,11 +287,15 @@ export struct Reader {
         .scrollBar(BarState.Auto)
         .align(Alignment.Top)
         .key('page_' + this.pageSeq)
+        // 滚动视口本身延伸到物理屏幕底部：内容从半透明导航条下方滑过
+        .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
       }
       }
       .width('100%')
       .height('100%')
       .backgroundColor($r('app.color.page_bg'))
+      // 根容器背景延伸到导航条之下（内容视口的延伸由上方 Scroll 自己负责）
+      .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
     }
     .hideTitleBar(true)
     .onReady((ctx: NavDestinationContext) => {
