@@ -2,8 +2,11 @@ import { Logger } from '../../common/Logger';
 import { WikiIndex } from '../../data/WikiIndex';
 import { BraceUtil } from '../parser/BraceUtil';
 import { TemplateContext, TemplateEngine, AskHandler } from '../template/TemplateEngine';
+import { PropsCacheStore } from './PropsCacheStore';
 
 const TAG = 'SmwQueryEngine';
+/** 扫描循环周期落盘间隔（ms）：长扫描中途退出/进程被杀，最多丢此间隔内的扫描量 */
+const SCAN_FLUSH_INTERVAL_MS = 10000;
 
 /** 属性过滤条件 */
 interface PropFilter {
@@ -59,6 +62,10 @@ export class SmwQueryEngine implements AskHandler {
   /** 在途属性提取（title → Promise）：并发扫描同一页时共享一次展开，避免重复读盘+模板展开 */
   private propPending: Map<string, Promise<Map<string, string[]>>> = new Map();
 
+  /** 属性快照持久化（可选，openSite 注入；缓存副作用内聚引擎，零站点知识） */
+  private propStore: PropsCacheStore | null = null;
+  private propSiteKey: string = '';
+
   static get(): SmwQueryEngine {
     if (SmwQueryEngine.instance === null) {
       SmwQueryEngine.instance = new SmwQueryEngine();
@@ -66,10 +73,34 @@ export class SmwQueryEngine implements AskHandler {
     return SmwQueryEngine.instance;
   }
 
-  /** 站点切换时清空缓存 */
+  /** 站点切换时清空缓存（须在 setPropsCacheStore 之前调用，否则预填会被清掉） */
   clear(): void {
     this.propCache.clear();
     this.propPending.clear();
+  }
+
+  /** 注入持久化快照并预热：load 站点快照 → 预填 propCache（不覆盖已有键）。
+   *  命中后 extractProps 走既有内存缓存路径跳过展开；siteKey 为运行时站点目录名 */
+  async setPropsCacheStore(store: PropsCacheStore, siteKey: string): Promise<void> {
+    this.propStore = store;
+    this.propSiteKey = siteKey;
+    const snap = await store.load(siteKey);
+    if (snap === null) {
+      return;
+    }
+    snap.forEach((props: Map<string, string[]>, title: string) => {
+      if (!this.propCache.has(title)) {
+        this.propCache.set(title, props);
+      }
+    });
+    Logger.info(TAG, 'props cache warmed: ' + siteKey + ' -> ' + snap.size + ' titles');
+  }
+
+  /** 快照落盘（节流异步；失败静默） */
+  private flushProps(): void {
+    if (this.propStore !== null && this.propSiteKey.length > 0) {
+      this.propStore.save(this.propSiteKey, this.propCache);
+    }
   }
 
   async query(args: string[], ctx: TemplateContext, isShow: boolean = false): Promise<string> {
@@ -85,6 +116,7 @@ export class SmwQueryEngine implements AskHandler {
       const q = this.parseQuery(expandedArgs);
       const titles = this.collectTitles(q, ctx);
       const rows: Row[] = [];
+      let lastFlushMs = Date.now();
       const reportProgress = ctx.onProgress !== undefined && ctx.onProgress !== null;
       for (let ti = 0; ti < titles.length; ti++) {
         const props = await this.extractProps(titles[ti], ctx);
@@ -95,10 +127,16 @@ export class SmwQueryEngine implements AskHandler {
         if (reportProgress && ((ti + 1) % 20 === 0 || ti === titles.length - 1)) {
           ctx.onProgress!(ti + 1, titles.length);
         }
-        // 页面已销毁（用户退出）：立即中止扫描，不再消耗 CPU
+        // 页面已销毁（用户退出）：立即中止扫描，已扫部分落盘（下次 load 预填，仅补扫缺页）
         if (ctx.cancelled !== undefined && ctx.cancelled() === true) {
           Logger.info(TAG, 'query cancelled at ' + (ti + 1) + '/' + titles.length);
+          this.flushProps();
           return '';
+        }
+        // 周期落盘：长扫描无需等到结束，中途退出/进程被杀也能保住已扫部分
+        if (Date.now() - lastFlushMs > SCAN_FLUSH_INTERVAL_MS) {
+          this.flushProps();
+          lastFlushMs = Date.now();
         }
         // 定期让出主线程：防止同步展开段连续执行饿死渲染/输入（THREAD_BLOCK 根治）
         if ((ti + 1) % 50 === 0 && ti !== titles.length - 1) {
@@ -109,6 +147,7 @@ export class SmwQueryEngine implements AskHandler {
       }
       Logger.info(TAG, 'query: titles=' + titles.length + ' matched=' + rows.length +
         ' ns=' + q.nsPrefix + ' filters=' + JSON.stringify(q.propFilters));
+      this.flushProps();
       this.sortRows(rows, q);
       if (q.limit > 0 && rows.length > q.limit) {
         rows.length = q.limit;
@@ -158,6 +197,7 @@ export class SmwQueryEngine implements AskHandler {
       }
     }
     Logger.info(TAG, 'show: ' + title + ' props=' + JSON.stringify(props) + ' -> ' + parts.length + ' values');
+    this.flushProps();
     return parts.join('、');
   }
 

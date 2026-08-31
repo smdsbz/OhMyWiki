@@ -9,6 +9,7 @@ import { ZipExtractor, ProgressCallback } from '../data/ZipExtractor';
 import { WikiSite } from '../model/WikiTypes';
 import { DataSource } from '../data/DataSource';
 import { JsonDataReader } from '../wiki/module/JsonDataReader';
+import { PropsCacheStore } from '../wiki/smw/PropsCacheStore';
 import { InvokeHandler } from '../wiki/template/TemplateEngine';
 import { SiteAdapter, SiteAdapterFactory } from '../wiki/siteadapter/SiteAdapter';
 import { RakuenSiteAdapter } from '../wiki/siteadapter/rakuen/RakuenSiteAdapter';
@@ -26,6 +27,8 @@ export class AppStore {
   private static activeSite: WikiSite | null = null;
   private static activeIndex: WikiIndex | null = null;
   private static activeAdapter: SiteAdapter | null = null;
+  /** SMW 属性快照持久化（cacheDir/smwc，可再生缓存） */
+  private static propStore: PropsCacheStore | null = null;
 
   static init(context: common.UIAbilityContext): void {
     if (AppStore.ctx !== null) {
@@ -36,6 +39,7 @@ export class AppStore {
     SiteAdapterFactory.register(new RakuenSiteAdapter());
     AppStore.sources = [];
     AppStore.sources.push(new PublicDirSource(context));
+    AppStore.propStore = new PropsCacheStore(context.cacheDir + '/smwc');
     Logger.info(TAG, 'AppStore initialized (public download)');
   }
 
@@ -217,6 +221,10 @@ export class AppStore {
     // 站点切换：清空 SMW 属性缓存与 JSON 数据缓存
     SmwQueryEngine.get().clear();
     JsonDataReader.clear();
+    // 注入属性快照并预热（必须在 clear 之后；站点目录名作为缓存归属标识）
+    if (AppStore.propStore !== null) {
+      await SmwQueryEngine.get().setPropsCacheStore(AppStore.propStore, site.name);
+    }
     Logger.info(TAG, 'opened site: ' + site.name + ' (' + idx.pageCount() + ' pages)');
     return true;
   }
