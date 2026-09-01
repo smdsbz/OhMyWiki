@@ -1,3 +1,4 @@
+import { HdsNavDestination, TextStyleMode } from '@kit.UIDesignKit';
 import { AppStore } from '../common/AppStore';
 import { Logger } from '../common/Logger';
 import { WikiIndex } from '../data/WikiIndex';
@@ -32,6 +33,8 @@ export struct Reader {
   @State progressTotal: number = 0;
   /** 阶段 2（后台 #ask 回填）进行中：顶栏下方显示细进度条 */
   @State asking: boolean = false;
+  /** 内容滚动控制器（HDS 标题栏滚动模糊绑定） */
+  private scroller: Scroller = new Scroller();
   private redirectDepth: number = 0;
   private pathStack: NavPathStack = new NavPathStack();
 
@@ -65,6 +68,8 @@ export struct Reader {
     this.errorMsg = '';
     this.progressDone = 0;
     this.progressTotal = 0;
+    // 标题先行：HDS 标题栏在加载期间即显示目标页名
+    this.pageTitle = title;
     try {
       const index = AppStore.getActiveIndex();
       if (index === null) {
@@ -198,10 +203,6 @@ export struct Reader {
     this.pathStack.pushPathByName('Reader', params);
   }
 
-  back(): void {
-    this.pathStack.pop();
-  }
-
   goHome(): void {
     this.pathStack.popToName('Reader');
   }
@@ -218,46 +219,8 @@ export struct Reader {
   }
 
   build() {
-    NavDestination() {
+    HdsNavDestination() {
       Column() {
-      // 顶栏
-      Row() {
-        Button('‹')
-          .width(40)
-          .height(40)
-          .fontSize(24)
-          .fontColor($r('app.color.text_primary'))
-          .backgroundColor('#00000000')
-          .onClick(() => {
-            this.back();
-          })
-        Text(this.displayTitle())
-          .fontSize(17)
-          .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.text_primary'))
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .layoutWeight(1)
-          .textAlign(TextAlign.Center)
-        Button() {
-          Image($r('app.media.ic_home'))
-            .width(20)
-            .height(20)
-            .fillColor($r('app.color.text_primary'))
-        }
-        .width(40)
-        .height(40)
-        .padding(0)
-        .backgroundColor('#00000000')
-        .onClick(() => {
-          this.goHome();
-        })
-      }
-      .width('100%')
-      .height(52)
-      .padding({ left: 4, right: 4 })
-      .backgroundColor($r('app.color.page_bg'))
-
       if (this.loading) {
         Column({ space: 10 }) {
           if (this.progressTotal >= 30) {
@@ -300,39 +263,40 @@ export struct Reader {
         .justifyContent(FlexAlign.Center)
       } else {
         Column() {
-          // 阶段 2 后台查询进度（非阻塞细条，查询期间页面内容仍可阅读/滚动）
-          if (this.asking) {
-            Row({ space: 8 }) {
-              if (this.progressTotal > 0) {
-                Progress({ value: this.progressDone, total: this.progressTotal, type: ProgressType.Linear })
-                  .layoutWeight(1)
-                  .height(4)
-                  .color($r('app.color.link'))
-                  .backgroundColor($r('app.color.accent_bg'))
-                Text(`${this.progressDone}/${this.progressTotal} 页`)
-                  .fontSize(11)
-                  .fontColor($r('app.color.text_tertiary'))
-              } else {
-                LoadingProgress()
-                  .width(16)
-                  .height(16)
-                  .color($r('app.color.link'))
-                Text('正在查询…')
-                  .fontSize(11)
-                  .fontColor($r('app.color.text_tertiary'))
-              }
-            }
-            .width('100%')
-            .padding({ left: 14, right: 14, top: 2, bottom: 2 })
-          }
-          Scroll() {
+          Scroll(this.scroller) {
             Column() {
+              // 阶段 2 后台查询进度（非阻塞细条，随内容滚动，查询期间页面仍可阅读）
+              if (this.asking) {
+                Row({ space: 8 }) {
+                  if (this.progressTotal > 0) {
+                    Progress({ value: this.progressDone, total: this.progressTotal, type: ProgressType.Linear })
+                      .layoutWeight(1)
+                      .height(4)
+                      .color($r('app.color.link'))
+                      .backgroundColor($r('app.color.accent_bg'))
+                    Text(`${this.progressDone}/${this.progressTotal} 页`)
+                      .fontSize(11)
+                      .fontColor($r('app.color.text_tertiary'))
+                  } else {
+                    LoadingProgress()
+                      .width(16)
+                      .height(16)
+                      .color($r('app.color.link'))
+                    Text('正在查询…')
+                      .fontSize(11)
+                      .fontColor($r('app.color.text_tertiary'))
+                  }
+                }
+                .width('100%')
+                .padding({ left: 14, right: 14, top: 2, bottom: 6 })
+              }
               WikiContentView({ nodes: this.nodes, renderKey: this.pageSeq, onNavigate: (t: string): void => {
                 this.navigate(t)
               } })
             }
             .width('100%')
-            .padding({ left: 14, right: 14, top: 8, bottom: 32 })
+            // 顶部让出 HDS 迷你标题栏（56vp）：滚动时内容从标题栏动态模糊下方穿过
+            .padding({ left: 14, right: 14, top: 56, bottom: 32 })
           }
           .layoutWeight(1)
           .scrollBar(BarState.Auto)
@@ -350,7 +314,24 @@ export struct Reader {
       // 根容器背景延伸到导航条之下（内容视口的延伸由上方 Scroll 自己负责）
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
     }
-    .hideTitleBar(true)
+    // HDS 系统标题栏：返回按钮/标题/菜单由系统样式接管，滚动时标题栏动态模糊
+    .titleBar({
+      content: {
+        title: { mainTitle: this.displayTitle() },
+        menu: {
+          value: [{
+            content: {
+              label: '首页',
+              type: TextStyleMode.NORMAL,
+              action: (): void => {
+                this.goHome();
+              }
+            }
+          }]
+        }
+      }
+    })
+    .bindToScrollable([this.scroller])
     .onReady((ctx: NavDestinationContext) => {
       this.pathStack = ctx.pathStack;
     })

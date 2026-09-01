@@ -1,5 +1,6 @@
 import { common } from '@kit.AbilityKit';
 import { promptAction } from '@kit.ArkUI';
+import { HdsNavigation, HdsNavigationTitleMode, TextStyleMode } from '@kit.UIDesignKit';
 import { picker } from '@kit.CoreFileKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { AppStore } from '../common/AppStore';
@@ -9,6 +10,8 @@ import { WikiSite } from '../model/WikiTypes';
 import { Reader, ReaderParams } from './Reader';
 
 const TAG = 'Index';
+/** HDS 大标题（FULL 模式）标题栏高度：内容区需让出此高度，滚动时从模糊标题栏下方穿过 */
+const TITLE_BAR_HEIGHT_FULL: number = 138;
 
 interface SiteItem {
   site: WikiSite;
@@ -28,6 +31,8 @@ struct Index {
   @State importMsg: string = '';
   @State importProgress: number = 0;
   @State importFileName: string = '';
+  /** 站点列表滚动控制器（HDS 标题栏滚动模糊/大标题收起绑定） */
+  private scroller: Scroller = new Scroller();
 
   aboutToAppear(): void {
     const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -163,37 +168,8 @@ struct Index {
   }
 
   build() {
-    Navigation(this.pathStack) {
+    HdsNavigation(this.pathStack) {
       Column() {
-      // 标题栏
-      Row() {
-        Text('OhMyWiki')
-          .fontSize(24)
-          .fontWeight(FontWeight.Bold)
-          .fontColor($r('app.color.text_primary'))
-        Blank()
-        Button('导入')
-          .height(36)
-          .fontSize(14)
-          .fontColor($r('app.color.link'))
-          .backgroundColor($r('app.color.accent_bg'))
-          .margin({ right: 8 })
-          .enabled(!this.importing)
-          .onClick(() => {
-            this.importWikiZip();
-          })
-        Button('刷新')
-          .height(36)
-          .fontSize(14)
-          .backgroundColor($r('app.color.link'))
-          .onClick(() => {
-            this.refresh();
-          })
-      }
-      .width('100%')
-      .padding({ left: 16, right: 16, top: 12, bottom: 12 })
-      .backgroundColor($r('app.color.page_bg'))
-
       if (this.loading) {
         Column({ space: 8 }) {
           LoadingProgress()
@@ -230,7 +206,7 @@ struct Index {
         .layoutWeight(1)
         .justifyContent(FlexAlign.Center)
       } else {
-        Scroll() {
+        Scroll(this.scroller) {
           Column({ space: 12 }) {
             if (this.errorMsg.length > 0) {
               Text(this.errorMsg)
@@ -262,7 +238,8 @@ struct Index {
             }
           }
           .width('100%')
-          .padding({ top: 8, bottom: 32 })
+          // 顶部让出 HDS 大标题栏（FULL 模式 138vp）
+          .padding({ top: TITLE_BAR_HEIGHT_FULL, bottom: 32 })
         }
         .layoutWeight(1)
         .scrollBar(BarState.Off)
@@ -273,12 +250,40 @@ struct Index {
       }
       .width('100%')
       .height('100%')
-      .backgroundColor($r('app.color.surface'))
+      // 页面背景与站点页（Reader）统一为 page_bg：窗口底色即 page_bg，状态栏区域无接缝
+      .backgroundColor($r('app.color.page_bg'))
       // 根容器背景延伸到导航条之下（内容视口的延伸由上方 Scroll 自己负责）
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
     }
+    // HDS 系统标题栏：大标题 + 菜单（文字型按钮），滚动时标题栏动态模糊、大标题收起
+    .titleBar({
+      content: {
+        title: { mainTitle: 'OhMyWiki' },
+        menu: {
+          value: [{
+            content: {
+              label: '导入',
+              type: TextStyleMode.NORMAL,
+              isEnabled: !this.importing,
+              action: (): void => {
+                this.importWikiZip();
+              }
+            }
+          }, {
+            content: {
+              label: '刷新',
+              type: TextStyleMode.NORMAL,
+              action: (): void => {
+                this.refresh();
+              }
+            }
+          }]
+        }
+      }
+    })
+    .titleMode(HdsNavigationTitleMode.FULL)
+    .bindToScrollable([this.scroller])
     .mode(NavigationMode.Stack)
-    .hideTitleBar(true)
     .navDestination(this.PageMap)
   }
 
@@ -340,7 +345,8 @@ struct Index {
     }
     .width('100%')
     .padding(16)
-    .backgroundColor($r('app.color.page_bg'))
+    // 卡片用 surface 衬托色（白页灰卡 / 黑页深灰卡），与 GuideBlock 一致
+    .backgroundColor($r('app.color.surface'))
     .borderRadius(12)
     .onClick(() => {
       this.openSite(item);
@@ -414,7 +420,7 @@ struct Index {
     .width('100%')
     .alignItems(HorizontalAlign.Start)
     .padding(14)
-    .backgroundColor($r('app.color.page_bg'))
+    .backgroundColor($r('app.color.surface'))
     .borderRadius(10)
   }
 }
