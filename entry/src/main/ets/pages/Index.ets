@@ -1,6 +1,6 @@
 import { common } from '@kit.AbilityKit';
 import { promptAction } from '@kit.ArkUI';
-import { HdsNavigation, HdsNavigationTitleMode, TextStyleMode } from '@kit.UIDesignKit';
+import { HdsNavigation, HdsNavigationTitleMode, TextStyleMode, HdsListItemCard, SuffixArrow } from '@kit.UIDesignKit';
 import { picker } from '@kit.CoreFileKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { AppStore } from '../common/AppStore';
@@ -32,7 +32,7 @@ struct Index {
   @State importProgress: number = 0;
   @State importFileName: string = '';
   /** 站点列表滚动控制器（HDS 标题栏滚动模糊/大标题收起绑定） */
-  private scroller: Scroller = new Scroller();
+  private scroller: ListScroller = new ListScroller();
 
   aboutToAppear(): void {
     const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -163,10 +163,6 @@ struct Index {
     }
   }
 
-  sourceBadgeText(): string {
-    return '公共下载';
-  }
-
   build() {
     HdsNavigation(this.pathStack) {
       Column() {
@@ -206,30 +202,54 @@ struct Index {
         .layoutWeight(1)
         .justifyContent(FlexAlign.Center)
       } else {
-        Scroll(this.scroller) {
-          Column({ space: 12 }) {
-            if (this.errorMsg.length > 0) {
+        List({ space: 12, scroller: this.scroller }) {
+          if (this.errorMsg.length > 0) {
+            ListItem() {
               Text(this.errorMsg)
                 .fontSize(13)
                 .fontColor($r('app.color.error'))
                 .padding(12)
             }
+          }
 
-            if (this.sites.length === 0) {
+          if (this.sites.length === 0) {
+            ListItem() {
               this.EmptyGuide()
-            } else {
+            }
+          } else {
+            ListItem() {
               Text(`共发现 ${this.sites.length} 个 Wiki 数据文件夹`)
                 .fontSize(13)
                 .fontColor($r('app.color.text_tertiary'))
                 .width('100%')
                 .padding({ left: 16, right: 16 })
-
-              ForEach(this.sites, (item: SiteItem) => {
-                this.SiteCard(item)
-              }, (item: SiteItem) => item.key)
             }
 
-            if (this.importMsg.length > 0) {
+            ForEach(this.sites, (item: SiteItem) => {
+              ListItem() {
+                // HDS 系统列表卡片：标题/副标题/描述 + 右箭头，边距按压态由系统接管
+                HdsListItemCard({
+                  textItem: {
+                    primaryText: { text: item.site.displayName },
+                    // 存储属性（公共下载）与站点 id 同行
+                    secondaryText: { text: `${item.site.name} · 公共下载` },
+                    description: item.site.totalPages > 0
+                      ? { text: `${item.site.totalPages} 个页面` }
+                      : undefined
+                  },
+                  suffixItem: new SuffixArrow(),
+                  // 页面为 page_bg 纯白/纯黑（与 Reader 统一），卡片用 surface 衬托色保持可辨识
+                  cardBackgroundColor: $r('app.color.surface'),
+                  onClick: (): void => {
+                    this.openSite(item);
+                  }
+                })
+              }
+            }, (item: SiteItem) => item.key)
+          }
+
+          if (this.importMsg.length > 0) {
+            ListItem() {
               Text(this.importMsg)
                 .fontSize(13)
                 .fontColor(this.importMsg.startsWith('导入失败') ? $r('app.color.error') : $r('app.color.link'))
@@ -237,13 +257,11 @@ struct Index {
                 .padding({ left: 16, right: 16, top: 4 })
             }
           }
-          .width('100%')
-          // 顶部让出 HDS 大标题栏（FULL 模式 138vp）
-          .padding({ top: TITLE_BAR_HEIGHT_FULL, bottom: 32 })
         }
         .layoutWeight(1)
         .scrollBar(BarState.Off)
-        .align(Alignment.Top)
+        // 顶部让出 HDS 大标题栏（FULL 模式 138vp）
+        .padding({ top: TITLE_BAR_HEIGHT_FULL, bottom: 32 })
         // 滚动视口本身延伸到物理屏幕底部：内容从半透明导航条下方滑过
         .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
       }
@@ -296,61 +314,6 @@ struct Index {
         startTitle: (param as ReaderParams).title ?? '首页'
       })
     }
-  }
-
-  @Builder
-  SiteCard(item: SiteItem) {
-    Column() {
-      Row() {
-        Column({ space: 4 }) {
-          Text(item.site.displayName)
-            .fontSize(17)
-            .fontWeight(FontWeight.Medium)
-            .fontColor($r('app.color.text_primary'))
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-          Text(item.site.name)
-            .fontSize(12)
-            .fontColor($r('app.color.text_tertiary'))
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-        }
-        .alignItems(HorizontalAlign.Start)
-        .layoutWeight(1)
-
-        Text(this.sourceBadgeText())
-          .fontSize(11)
-          .fontColor($r('app.color.link'))
-          .padding({ left: 8, right: 8, top: 3, bottom: 3 })
-          .backgroundColor($r('app.color.accent_bg'))
-          .borderRadius(10)
-      }
-      .width('100%')
-
-      if (item.site.totalPages > 0) {
-        Text(`${item.site.totalPages} 个页面`)
-          .fontSize(12)
-          .fontColor($r('app.color.text_tertiary'))
-          .margin({ top: 6 })
-      }
-
-      Row() {
-        Blank()
-        Text('打开 ›')
-          .fontSize(14)
-          .fontColor($r('app.color.link'))
-      }
-      .width('100%')
-      .margin({ top: 8 })
-    }
-    .width('100%')
-    .padding(16)
-    // 卡片用 surface 衬托色（白页灰卡 / 黑页深灰卡），与 GuideBlock 一致
-    .backgroundColor($r('app.color.surface'))
-    .borderRadius(12)
-    .onClick(() => {
-      this.openSite(item);
-    })
   }
 
   @Builder
