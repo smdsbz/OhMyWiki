@@ -38,8 +38,8 @@ interface AskQuery {
   limit: number;
   /** 首列（页面名）表头 */
   mainLabel: string;
-  /** headers=plain：不输出表头行 */
-  headersPlain: boolean;
+  /** headers=hide/none：不输出表头行（headers=plain 为纯文本表头，仍显示） */
+  headersHidden: boolean;
   /** 输出格式（table/list） */
   format: string;
 }
@@ -256,7 +256,7 @@ export class SmwQueryEngine implements AskHandler {
       sortProps: [],
       limit: 0,
       mainLabel: '',
-      headersPlain: false,
+      headersHidden: false,
       format: 'table',
     };
     // 条件（第一个参数）：[[ns:+]] / [[属性::值]]
@@ -305,7 +305,9 @@ export class SmwQueryEngine implements AskHandler {
           } else if (key === 'mainlabel') {
             q.mainLabel = val;
           } else if (key === 'headers') {
-            q.headersPlain = val.toLowerCase() === 'plain';
+            // SMW：show（默认，链接表头）/ plain（纯文本表头，仍显示）/ hide·none（隐藏）
+            const hv = val.toLowerCase();
+            q.headersHidden = hv === 'hide' || hv === 'none';
           } else if (key === 'format') {
             q.format = val.toLowerCase();
           } else if (key === 'template') {
@@ -480,6 +482,10 @@ export class SmwQueryEngine implements AskHandler {
 
   private async render(rows: Row[], q: AskQuery, index: WikiIndex | null,
     ctx: TemplateContext): Promise<string> {
+    // 空结果输出空串（SMW 默认空结果不产生任何输出，避免残留空表壳）
+    if (rows.length === 0) {
+      return '';
+    }
     // format=template：每行数据传给指定模板展开（如 {{日期(游戏版本)|更新日期=…}}）
     if (q.format === 'template' && q.templateName.length > 0 && ctx !== null) {
       const eng = new TemplateEngine(ctx);
@@ -512,7 +518,7 @@ export class SmwQueryEngine implements AskHandler {
     // 默认表格
     const sb: string[] = [];
     sb.push('{| class="wikitable"');
-    if (!q.headersPlain) {
+    if (!q.headersHidden) {
       sb.push('|-');
       sb.push('! ' + (q.mainLabel.length > 0 ? q.mainLabel : '页面'));
       for (const dp of q.displayProps) {

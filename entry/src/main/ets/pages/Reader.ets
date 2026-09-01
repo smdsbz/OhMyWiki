@@ -162,7 +162,11 @@ export struct Reader {
           Logger.warn(TAG, 'pending ask failed #' + pa.id + ' ' + JSON.stringify(e));
         }
         const mark = PLACEHOLDER_MARK + 'ASK:' + pa.id + '\u0000';
-        text = text.split(mark).join(result);
+        // 块级结果（#ask 表格）前后补换行：同一行多个结果拼接时不粘连
+        //（`|}{|` 会破坏表格解析，`</div>` 需独占行才能闭合容器）；
+        // #show 内联值不补，避免句中断行被折成空格
+        const pad = pa.isShow ? '' : '\n';
+        text = text.split(mark).join(pad + result + pad);
       }
       if (this.askRunId !== runId) {
         Logger.info(TAG, 'runPendingAsks [' + title + '] cancelled before render');

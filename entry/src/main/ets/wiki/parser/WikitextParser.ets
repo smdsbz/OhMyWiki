@@ -415,6 +415,29 @@ export class WikitextParser {
       return { node: null, nextIndex: start };
     }
 
+    // 同行开闭形态（<div ...>内容</div> 单行）：取标签间内容解析，
+    //  否则闭合标签在首行会被跨行收集逻辑漏掉（吞掉后续行）。
+    //  注意在去缩进后的 t/lower 上取下标，保证二者对齐
+    const openEnd = t.indexOf('>');
+    const closeIdx = openEnd >= 0 ? lower.indexOf(closeTag, openEnd + 1) : -1;
+    if (closeIdx >= 0) {
+      const innerLines: string[] = [];
+      const content = t.substring(openEnd + 1, closeIdx);
+      if (content.trim().length > 0) {
+        innerLines.push(content);
+      }
+      const remainder = t.substring(closeIdx + closeTag.length);
+      if (remainder.trim().length > 0) {
+        innerLines.push(remainder);
+      }
+      const node: WikiNode = {
+        type: NodeType.Container,
+        align: align.length > 0 ? align : undefined,
+        children: this.parseBlocks(innerLines, 0, innerLines.length),
+      };
+      return { node: node, nextIndex: start + 1 };
+    }
+
     // 收集直到闭合标签
     const inner: string[] = [];
     let i = start + 1;
@@ -641,17 +664,30 @@ export class WikitextParser {
         i++;
         continue;
       }
-      // 其他行：若是单元格内容的延续（以 '|' 或 '!' 开头之外），追加到最后一个单元格
+      // 其他行：若是单元格内容的延续（以 '|' 或 '!' 开头之外），追加到最后一个单元格。
+      //  延续内容按行内语法解析——可能含链接等结构，不能当纯文本拼接（否则 [[..]] 原文泄漏）
       if (currentRow !== null && (currentRow.children as WikiNode[]).length > 0) {
         const cells = currentRow.children as WikiNode[];
         const lastCell = cells[cells.length - 1];
         const lastInline = lastCell.inline as WikiNode[];
-        const lastNode = lastInline.length > 0 ? lastInline[lastInline.length - 1] : null;
         const contText = raw.trim();
-        if (lastNode !== null && lastNode.type === NodeType.Text) {
-          lastNode.text = (lastNode.text ?? '') + ' ' + contText;
-        } else {
-          lastInline.push({ type: NodeType.Text, text: contText });
+        if (contText.length > 0) {
+          const parsed = this.parseInline(contText);
+          // MediaWiki 语义：单元格内跨行内容以空格连接
+          const first = parsed.length > 0 ? parsed[0] : null;
+          if (first !== null && first.type === NodeType.Text) {
+            first.text = ' ' + (first.text ?? '');
+            for (const p of parsed) {
+              lastInline.push(p);
+            }
+          } else if (first !== null) {
+            lastInline.push({ type: NodeType.Text, text: ' ' });
+            for (const p of parsed) {
+              lastInline.push(p);
+            }
+          } else {
+            lastInline.push({ type: NodeType.Text, text: ' ' });
+          }
         }
       }
       i++;

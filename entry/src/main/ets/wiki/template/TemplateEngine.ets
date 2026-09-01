@@ -58,10 +58,13 @@ export class TemplateEngine {
   }
 
   async expand(text: string): Promise<string> {
-    return await this.expandInner(text, 0, []);
+    return await this.expandInner(text, 0, [], false);
   }
 
-  private async expandInner(text: string, depth: number, stack: string[]): Promise<string> {
+  /** inFnArg：当前文本是否位于解析函数实参内（如 {{#expr:{{#show:…}}*2}}）。
+   *  实参内的 #ask/#show 结果会被同步消费（求值/比较），必须立即执行；
+ *  其余位置（页面顶层、模板体）可惰性登记，占位结果在解析前回填 */
+  private async expandInner(text: string, depth: number, stack: string[], inFnArg: boolean): Promise<string> {
     if (depth > MAX_DEPTH) {
       return '';
     }
@@ -95,7 +98,7 @@ export class TemplateEngine {
           continue;
         }
         const inner = text.substring(i + 2, end - 2);
-        sb.push(await this.expandOne(inner, depth, stack));
+        sb.push(await this.expandOne(inner, depth, stack, inFnArg));
         i = end;
         continue;
       }
@@ -107,19 +110,27 @@ export class TemplateEngine {
           continue;
         }
         const inner = text.substring(i + 2, end - 2);
-        // 展开链接内的模板（如 [[{{FULLPAGENAME}}/子页|显示]]）
-        const expandedInner = await this.expandInner(inner, depth + 1, stack);
+        // 展开链接内的模板（如 [[{{FULLPAGENAME}}/子页|显示]]）。
+        //  链接目标/标签被同步用于构成链接本身，按实参上下文处理（同步）
+        const expandedInner = await this.expandInner(inner, depth + 1, stack, true);
         const dc = this.findTopLevelDoubleColon(expandedInner);
         if (dc >= 0) {
-          // SMW [[属性::目标|标签]]：属性存储目标，显示用标签（无标签则显示目标）
+          // SMW [[属性::目标|标签]]：语义标注之外仍是普通内部链接，输出 [[目标|标签]]
+          //  交解析器渲染——目标页存在则可点击跳转，不存在则退化为纯文本（与 MediaWiki
+          //  对 wikipage 型/值型属性的渲染一致）；属性存储仍取目标
           const prop = expandedInner.substring(0, dc).trim();
           const value = expandedInner.substring(dc + 2).trim();
+          const pipe = value.indexOf('|');
+          const target = pipe >= 0 ? value.substring(0, pipe).trim() : value;
           if (this.ctx.capture !== undefined && this.ctx.capture !== null) {
-            const pipe = value.indexOf('|');
-            this.ctx.capture(prop, pipe >= 0 ? value.substring(0, pipe).trim() : value);
+            this.ctx.capture(prop, target);
           }
-          const pipe2 = value.indexOf('|');
-          sb.push(pipe2 >= 0 ? value.substring(pipe2 + 1).trim() : value);
+          const label = pipe >= 0 ? value.substring(pipe + 1).trim() : '';
+          if (target.length === 0) {
+            sb.push(label);
+          } else {
+            sb.push(label.length > 0 ? '[[' + target + '|' + label + ']]' : '[[' + target + ']]');
+          }
           i = end;
           continue;
         }
@@ -133,7 +144,7 @@ export class TemplateEngine {
     return sb.join('');
   }
 
-  private async expandOne(inner: string, depth: number, stack: string[]): Promise<string> {
+  private async expandOne(inner: string, depth: number, stack: string[], inFnArg: boolean): Promise<string> {
     // Special 页面（名称含 ':'，需特殊处理分隔符）
     const trimmed = inner.trim();
     if (trimmed.startsWith('Special:PrefixIndex/')) {
@@ -167,7 +178,7 @@ export class TemplateEngine {
       let name = sep >= 0 ? trimmed.substring(0, sep) : trimmed;
       const rest = sep >= 0 ? trimmed.substring(sep + 1) : '';
       if (name.indexOf('{{') >= 0) {
-        name = (await this.expandInner(name, depth + 1, stack)).trim();
+        name = (await this.expandInner(name, depth + 1, stack, true)).trim();
       }
       return await this.specialPrefixIndex(name, rest);
     }
@@ -201,9 +212,10 @@ export class TemplateEngine {
     }
     let name = (nameEnd >= 0 ? inner.substring(0, nameEnd) : inner).trim();
     const rest = nameEnd >= 0 ? inner.substring(nameEnd + 1) : '';
-    // 展开名称中的嵌套模板（如 {{Special:PrefixIndex/{{FULLPAGENAME}}/ ...}}）
+    // 展开名称中的嵌套模板（如 {{Special:PrefixIndex/{{FULLPAGENAME}}/ ...}}）。
+    //  名称被同步用于查找模板/函数，按实参上下文处理（同步）
     if (name.indexOf('{{') >= 0) {
-      name = (await this.expandInner(name, depth + 1, stack)).trim();
+      name = (await this.expandInner(name, depth + 1, stack, true)).trim();
     }
     if (name.length === 0) {
       return '';
@@ -224,7 +236,7 @@ export class TemplateEngine {
     }
     // 解析函数
     if (name.startsWith('#')) {
-      return await this.parserFunction(name, rest, depth, stack);
+      return await this.parserFunction(name, rest, depth, stack, inFnArg);
     }
     // 主命名空间转页 {{:Page}}
     if (name.startsWith(':')) {
@@ -240,7 +252,7 @@ export class TemplateEngine {
       return await this.specialPrefixIndex(name, rest);
     }
     // 普通模板
-    return await this.expandTemplate(name, rest, depth, stack);
+    return await this.expandTemplate(name, rest, depth, stack, inFnArg);
   }
 
   /** {{Special:PrefixIndex/<前缀>|...}}：列出指定前缀的子页面 */
@@ -270,26 +282,29 @@ export class TemplateEngine {
     return sb.join('\n');
   }
 
-  private async parserFunction(name: string, rest: string, depth: number, stack: string[]): Promise<string> {
+  /** 解析函数。实参的展开结果会被同步消费（求值/比较/选择分支），
+   *  故实参内一律以同步上下文展开（inFnArg=true） */
+  private async parserFunction(name: string, rest: string, depth: number, stack: string[],
+    inFnArg: boolean): Promise<string> {
     const args = BraceUtil.splitTopLevel(rest, '|');
     const fname = name.toLowerCase();
     if (fname === '#if') {
       const test = this.get(args, 0);
-      return await this.expandInner(test.trim().length > 0 ? this.get(args, 1) : this.get(args, 2), depth + 1, stack);
+      return await this.expandInner(test.trim().length > 0 ? this.get(args, 1) : this.get(args, 2), depth + 1, stack, true);
     }
     if (fname === '#ifeq') {
       const a = this.get(args, 0).trim();
       const b = this.get(args, 1).trim();
-      return await this.expandInner(a === b ? this.get(args, 2) : this.get(args, 3), depth + 1, stack);
+      return await this.expandInner(a === b ? this.get(args, 2) : this.get(args, 3), depth + 1, stack, true);
     }
     if (fname === '#ifexist') {
       // 标题参数先展开嵌套魔术字/模板（如 {{#ifexist:文件:{{NAMESPACE}}-{{PAGENAME}}.jpg|...}}）
-      const title = (await this.expandInner(this.get(args, 0), depth + 1, stack)).trim();
+      const title = (await this.expandInner(this.get(args, 0), depth + 1, stack, true)).trim();
       const exists = this.ctx.index !== null && this.ctx.index.pageExists(title);
-      return await this.expandInner(exists ? this.get(args, 1) : this.get(args, 2), depth + 1, stack);
+      return await this.expandInner(exists ? this.get(args, 1) : this.get(args, 2), depth + 1, stack, true);
     }
     if (fname === '#iferror') {
-      return await this.expandInner(this.get(args, 2), depth + 1, stack);
+      return await this.expandInner(this.get(args, 2), depth + 1, stack, true);
     }
     if (fname === '#switch') {
       const value = this.get(args, 0).trim();
@@ -305,14 +320,14 @@ export class TemplateEngine {
         if (key === '#default') {
           def = val;
         } else if (key === value) {
-          return await this.expandInner(val, depth + 1, stack);
+          return await this.expandInner(val, depth + 1, stack, true);
         }
       }
-      return await this.expandInner(def, depth + 1, stack);
+      return await this.expandInner(def, depth + 1, stack, true);
     }
     if (fname === '#expr') {
       // 先展开参数中的嵌套调用（如 {{#expr:{{#show:...}}*2}}），再求值
-      const expr = await this.expandInner(this.get(args, 0), depth + 1, stack);
+      const expr = await this.expandInner(this.get(args, 0), depth + 1, stack, true);
       return this.evalExpr(expr);
     }
     if (fname === '#titleparts') {
@@ -343,9 +358,10 @@ export class TemplateEngine {
     }
     if (fname === '#ask' || fname === '#show') {
       // 渐进渲染：惰性模式登记不执行，返回占位标记（Reader 阶段 2 执行后回填）。
-      //  仅限顶层（depth 0）：嵌套在解析函数参数内（如 {{#expr:{{#show:…}}*2}}）必须同步执行，
-      //  否则占位文本被当数值解析（价格变 0）
-      if (depth === 0 && this.ctx.lazyAsk === true &&
+      //  条件是「不在解析函数实参内」——实参内的结果会被同步消费（如 {{#expr:{{#show:…}}*2}}
+      //  商店价格），必须立即执行，否则占位文本被当数值解析（价格变 0）；
+      //  其余位置（页面顶层、模板体内）登记后回填即可，模板嵌套的深查询不再阻塞首帧
+      if (!inFnArg && this.ctx.lazyAsk === true &&
         this.ctx.pendingAsks !== undefined && this.ctx.pendingAsks !== null) {
         TemplateEngine.askSeq++;
         const pa: PendingAsk = { id: TemplateEngine.askSeq, args: args, isShow: fname === '#show' };
@@ -430,7 +446,8 @@ export class TemplateEngine {
     }
   }
 
-  private async expandTemplate(name: string, rest: string, depth: number, stack: string[]): Promise<string> {
+  private async expandTemplate(name: string, rest: string, depth: number, stack: string[],
+    inFnArg: boolean): Promise<string> {
     if (stack.indexOf(name) >= 0) {
       // 循环引用保护
       return '';
@@ -461,7 +478,7 @@ export class TemplateEngine {
     }
     const substituted = this.substituteParams(cleaned, named, positional);
     const newStack = stack.concat([name]);
-    return await this.expandInner(substituted, depth + 1, newStack);
+    return await this.expandInner(substituted, depth + 1, newStack, inFnArg);
   }
 
   /** 参数替换：{{{key}}} / {{{key|default}}} / {{{1}}}；默认值支持嵌套 {{{...}}}（递归替换） */

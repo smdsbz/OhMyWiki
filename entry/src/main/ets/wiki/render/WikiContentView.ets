@@ -678,7 +678,14 @@ export struct WikiContentView {
         if (r.kind === 'image') {
           segs.push({ kind: 'image', fileName: r.fileName, width: r.width, height: r.height, align: r.align });
         } else if (r.kind === 'placeholder') {
-          segs.push({ kind: 'placeholder', reason: r.reason });
+          // 连续的查询占位（同一处登记的多个 #ask）合并为一个加载提示，避免成串冗余
+          const isAsk = (r.reason ?? '').startsWith('ASK:');
+          const last = segs.length > 0 ? segs[segs.length - 1] : null;
+          const merged = isAsk && last !== null && last.kind === 'placeholder' &&
+            (last.reason ?? '').startsWith('ASK:');
+          if (!merged) {
+            segs.push({ kind: 'placeholder', reason: r.reason });
+          }
         } else if (r.kind === 'break') {
           segs.push({ kind: 'break' });
         }
@@ -779,13 +786,21 @@ export struct WikiContentView {
         .width('100%')
         .alignItems(HorizontalAlign.Center)
       } else if (seg.kind === 'placeholder') {
-        Text('⚠ ' + (seg.reason ?? '内容暂不支持渲染'))
-          .fontSize(12)
-          .fontColor($r('app.color.warn_text'))
-          .padding({ left: 8, right: 8, top: 4, bottom: 4 })
-          .backgroundColor($r('app.color.warn_bg'))
-          .borderRadius(6)
-          .margin({ top: 2, bottom: 2 })
+        if ((seg.reason ?? '').startsWith('ASK:')) {
+          // 渐进渲染：查询后台执行中的占位（与块级 renderPlaceholder 同样式）
+          Text('⏳ 数据加载中…')
+            .fontSize(12)
+            .fontColor($r('app.color.loading_text'))
+            .padding({ left: 8, right: 8, top: 2, bottom: 2 })
+        } else {
+          Text('⚠ ' + (seg.reason ?? '内容暂不支持渲染'))
+            .fontSize(12)
+            .fontColor($r('app.color.warn_text'))
+            .padding({ left: 8, right: 8, top: 4, bottom: 4 })
+            .backgroundColor($r('app.color.warn_bg'))
+            .borderRadius(6)
+            .margin({ top: 2, bottom: 2 })
+        }
       } else if (seg.kind === 'break') {
         Column() {
         }
