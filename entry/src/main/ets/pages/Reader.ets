@@ -352,8 +352,7 @@ export struct Reader {
         blurStrategy: BlurStrategy.ENABLE,
         originalStyle: {
           // 对齐官方默认：blurRadius 配 systemMaterialEffect 时默认 12.0；
-          // maskExtraHeight 官方示例 56.0（蒙版延伸到栏外，衰减零点在栏下方）
-          backgroundStyle: { backgroundColor: $r('sys.color.comp_background_gray'), blurRadius: 24, maskExtraHeight: 100 },
+          backgroundStyle: { backgroundColor: $r('sys.color.comp_background_gray'), blurRadius: 12, maskExtraHeight: 24 },
           // IMMERSIVE_GRADIENT_BLUR 默认标题为白色（图文沉浸场景假设），
           // 页面为浅灰底需显式改深色，否则白底白字
           contentStyle: {
@@ -363,9 +362,8 @@ export struct Reader {
           }
         },
         scrollEffectStyle: {
-          // maskExtraHeight 100：蒙版延伸到栏外，强模糊区覆盖全栏（含标题带）。
           // 注：背景板色渲染在内容图层之下，半透明纱罩罩不住内容文字（实测），勿再尝试
-          backgroundStyle: { backgroundColor: Color.Transparent, blurRadius: 24, maskExtraHeight: 100 },
+          backgroundStyle: { backgroundColor: Color.Transparent, blurRadius: 12, maskExtraHeight: 24 },
           contentStyle: {
             titleStyle: { mainTitleColor: $r('sys.color.font_primary') },
             menuStyle: { iconColor: $r('sys.color.font_primary'), textColor: $r('sys.color.font_primary') },
