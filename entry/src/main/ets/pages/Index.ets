@@ -1,6 +1,7 @@
-import { common } from '@kit.AbilityKit';
+﻿import { common } from '@kit.AbilityKit';
 import { promptAction } from '@kit.ArkUI';
-import { HdsNavigation, HdsNavigationTitleMode, TextStyleMode, HdsListItemCard, SuffixArrow } from '@kit.UIDesignKit';
+import { HdsNavigation, HdsNavigationTitleMode, TextStyleMode, HdsListItemCard, SuffixArrow, ScrollEffectType, BlurStrategy, hdsMaterial } from '@kit.UIDesignKit';
+import { LengthMetrics } from '@kit.ArkUI';
 import { picker } from '@kit.CoreFileKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { AppStore } from '../common/AppStore';
@@ -10,8 +11,9 @@ import { WikiSite } from '../model/WikiTypes';
 import { Reader, ReaderParams } from './Reader';
 
 const TAG = 'Index';
-/** HDS 大标题（FULL 模式）标题栏高度：内容区需让出此高度，滚动时从模糊标题栏下方穿过 */
-const TITLE_BAR_HEIGHT_FULL: number = 138;
+/** 内容顶部让位量：ignoreLayoutSafeArea(TOP) 后视口含状态栏，
+ *  需让出「状态栏+迷你标题栏」全高（实测 104vp → 内容起于 y316，栏底 304 之下） */
+const TITLE_INSET_TOTAL: number = 104;
 
 interface SiteItem {
   site: WikiSite;
@@ -31,8 +33,9 @@ struct Index {
   @State importMsg: string = '';
   @State importProgress: number = 0;
   @State importFileName: string = '';
-  /** 站点列表滚动控制器（HDS 标题栏滚动模糊/大标题收起绑定） */
-  private scroller: ListScroller = new ListScroller();
+  /** 站点列表滚动控制器（HDS 标题栏滚动模糊绑定；Scroll 同 Reader） */
+  private scroller: Scroller = new Scroller();
+
 
   aboutToAppear(): void {
     const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -171,10 +174,10 @@ struct Index {
           LoadingProgress()
             .width(40)
             .height(40)
-            .color($r('app.color.link'))
+            .color($r('sys.color.brand'))
           Text('正在扫描 Wiki 数据…')
             .fontSize(14)
-            .fontColor($r('app.color.text_tertiary'))
+            .fontColor($r('sys.color.font_tertiary'))
         }
         .layoutWeight(1)
         .justifyContent(FlexAlign.Center)
@@ -182,18 +185,18 @@ struct Index {
         Column({ space: 12 }) {
           Text(this.importMsg)
             .fontSize(14)
-            .fontColor($r('app.color.text_tertiary'))
+            .fontColor($r('sys.color.font_tertiary'))
           Progress({ value: this.importProgress, total: 100, type: ProgressType.Linear })
             .width('70%')
-            .color($r('app.color.link'))
-            .backgroundColor($r('app.color.accent_bg'))
+            .color($r('sys.color.brand'))
+            .backgroundColor($r('sys.color.comp_background_secondary'))
           Text(this.importProgress + '%')
             .fontSize(13)
-            .fontColor($r('app.color.link'))
+            .fontColor($r('sys.color.brand'))
           if (this.importFileName.length > 0) {
             Text(this.importFileName)
               .fontSize(11)
-              .fontColor($r('app.color.text_tertiary'))
+              .fontColor($r('sys.color.font_tertiary'))
               .maxLines(1)
               .textOverflow({ overflow: TextOverflow.Ellipsis })
               .width('70%')
@@ -202,31 +205,25 @@ struct Index {
         .layoutWeight(1)
         .justifyContent(FlexAlign.Center)
       } else {
-        List({ space: 12, scroller: this.scroller }) {
-          if (this.errorMsg.length > 0) {
-            ListItem() {
+        Scroll(this.scroller) {
+          Column({ space: 12 }) {
+            if (this.errorMsg.length > 0) {
               Text(this.errorMsg)
                 .fontSize(13)
                 .fontColor($r('app.color.error'))
                 .padding(12)
             }
-          }
 
-          if (this.sites.length === 0) {
-            ListItem() {
+            if (this.sites.length === 0) {
               this.EmptyGuide()
-            }
-          } else {
-            ListItem() {
+            } else {
               Text(`共发现 ${this.sites.length} 个 Wiki 数据文件夹`)
                 .fontSize(13)
-                .fontColor($r('app.color.text_tertiary'))
+                .fontColor($r('sys.color.font_tertiary'))
                 .width('100%')
                 .padding({ left: 16, right: 16 })
-            }
 
-            ForEach(this.sites, (item: SiteItem) => {
-              ListItem() {
+              ForEach(this.sites, (item: SiteItem) => {
                 // HDS 系统列表卡片：标题/副标题/描述 + 右箭头，边距按压态由系统接管
                 HdsListItemCard({
                   textItem: {
@@ -238,38 +235,37 @@ struct Index {
                       : undefined
                   },
                   suffixItem: new SuffixArrow(),
-                  // 页面为 page_bg 纯白/纯黑（与 Reader 统一），卡片用 surface 衬托色保持可辨识
-                  cardBackgroundColor: $r('app.color.surface'),
                   onClick: (): void => {
                     this.openSite(item);
                   }
                 })
-              }
-            }, (item: SiteItem) => item.key)
-          }
+              }, (item: SiteItem) => item.key)
+            }
 
-          if (this.importMsg.length > 0) {
-            ListItem() {
+            if (this.importMsg.length > 0) {
               Text(this.importMsg)
                 .fontSize(13)
-                .fontColor(this.importMsg.startsWith('导入失败') ? $r('app.color.error') : $r('app.color.link'))
+                .fontColor(this.importMsg.startsWith('导入失败') ? $r('app.color.error') : $r('sys.color.brand'))
                 .width('100%')
                 .padding({ left: 16, right: 16, top: 4 })
             }
           }
+          .width('100%')
+          // 顶部让出「状态栏+标题栏」全高（ignoreLayoutSafeArea 后视口含状态栏）
+          .padding({ top: TITLE_INSET_TOTAL, bottom: 32 })
         }
         .layoutWeight(1)
         .scrollBar(BarState.Off)
-        // 顶部让出 HDS 大标题栏（FULL 模式 138vp）
-        .padding({ top: TITLE_BAR_HEIGHT_FULL, bottom: 32 })
+        // 内容短于视口时 Scroll 默认居中子组件——单站点时会把列表吊到屏幕中部，须顶部对齐
+        .align(Alignment.Top)
         // 滚动视口本身延伸到物理屏幕底部：内容从半透明导航条下方滑过
         .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
       }
       }
       .width('100%')
       .height('100%')
-      // 页面背景与站点页（Reader）统一为 page_bg：窗口底色即 page_bg，状态栏区域无接缝
-      .backgroundColor($r('app.color.page_bg'))
+      // 页面背景对齐系统设置：comp_background_gray（浅 #F0F3F5 / 深 #000000）
+      .backgroundColor($r('sys.color.comp_background_gray'))
       // 根容器背景延伸到导航条之下（内容视口的延伸由上方 Scroll 自己负责）
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
     }
@@ -297,9 +293,51 @@ struct Index {
             }
           }]
         }
+      },
+      style: {
+        // 官方沉浸式完整配方（指令要求强制最高档，无降级）：
+        // IMMERSIVE_GRADIENT_BLUR + 液态玻璃材质 IMMERSIVE/EXQUISITE（精致，最高级）
+        scrollEffectOpts: {
+          enableScrollEffect: true,
+          scrollEffectType: ScrollEffectType.IMMERSIVE_GRADIENT_BLUR,
+          // 过渡窗口 20→60vp：静止时保持纯净 originalStyle（默认 0 起步会让
+          // 材质尾带在零滚动时就罩住栏下首行内容）
+          blurEffectiveStartOffset: LengthMetrics.vp(20),
+          blurEffectiveEndOffset: LengthMetrics.vp(60)
+        },
+        systemMaterialEffect: {
+          materialType: hdsMaterial.MaterialType.IMMERSIVE,
+          materialLevel: hdsMaterial.MaterialLevel.EXQUISITE
+        },
+        blurStrategy: BlurStrategy.ENABLE,
+        originalStyle: {
+          // 对齐官方默认：blurRadius 配 systemMaterialEffect 时默认 12.0；
+          // maskExtraHeight 官方示例 56.0（蒙版延伸到栏外，衰减零点在栏下方）
+          backgroundStyle: { backgroundColor: $r('sys.color.comp_background_gray'), blurRadius: 24, maskExtraHeight: 100 },
+          // IMMERSIVE_GRADIENT_BLUR 默认标题为白色（图文沉浸场景假设），
+          // 页面为浅灰底需显式改深色，否则白底白字
+          contentStyle: {
+            titleStyle: { mainTitleColor: $r('sys.color.font_primary') },
+            menuStyle: { iconColor: $r('sys.color.font_primary'), textColor: $r('sys.color.font_primary') }
+          }
+        },
+        scrollEffectStyle: {
+          // maskExtraHeight 100：蒙版延伸到栏外，强模糊区覆盖全栏（含标题带）。
+          // 注：背景板色渲染在内容图层之下，半透明纱罩罩不住内容文字（实测），勿再尝试
+          backgroundStyle: { backgroundColor: Color.Transparent, blurRadius: 24, maskExtraHeight: 100 },
+          contentStyle: {
+            titleStyle: { mainTitleColor: $r('sys.color.font_primary') },
+            menuStyle: { iconColor: $r('sys.color.font_primary'), textColor: $r('sys.color.font_primary') }
+          }
+        }
       }
     })
-    .titleMode(HdsNavigationTitleMode.FULL)
+    .titleMode(HdsNavigationTitleMode.MINI)
+    // 首页为导航栈根节点，无上级页面可返回：隐藏标题栏回退按钮
+    .hideBackButton(true)
+    // 官方沉浸式完整配方：TOP+BOTTOM 一起放行（示例如此搭配），使首页内容区
+    // 与 Reader 一致地延伸进底部导航条之下
+    .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
     .bindToScrollable([this.scroller])
     .mode(NavigationMode.Stack)
     .navDestination(this.PageMap)
@@ -322,12 +360,12 @@ struct Index {
       Text('未找到 Wiki 数据')
         .fontSize(18)
         .fontWeight(FontWeight.Bold)
-        .fontColor($r('app.color.text_primary'))
+        .fontColor($r('sys.color.font_primary'))
         .margin({ top: 32 })
 
       Text('把 wiki 数据文件夹放进公共下载目录，每个顶层文件夹即一个 MediaWiki 站点（含 pages/ 与 images/）。')
         .fontSize(14)
-        .fontColor($r('app.color.text_body'))
+        .fontColor($r('sys.color.font_secondary'))
         .textAlign(TextAlign.Start)
         .lineHeight(22)
         .padding({ left: 24, right: 24 })
@@ -341,8 +379,8 @@ struct Index {
         Button('授权访问公共下载目录')
           .height(48)
           .fontSize(16)
-          .fontColor($r('app.color.page_bg'))
-          .backgroundColor($r('app.color.link'))
+          .fontColor(Color.White)
+          .backgroundColor($r('sys.color.brand'))
           .borderRadius(24)
           .padding({ left: 24, right: 24 })
           .onClick(() => {
@@ -372,18 +410,18 @@ struct Index {
       Text(title)
         .fontSize(15)
         .fontWeight(FontWeight.Medium)
-        .fontColor($r('app.color.text_primary'))
+        .fontColor($r('sys.color.font_primary'))
         .width('100%')
       Text(body)
         .fontSize(13)
-        .fontColor($r('app.color.text_secondary'))
+        .fontColor($r('sys.color.font_secondary'))
         .lineHeight(20)
         .width('100%')
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start)
     .padding(14)
-    .backgroundColor($r('app.color.surface'))
+    .backgroundColor($r('sys.color.comp_background_primary'))
     .borderRadius(10)
   }
 }

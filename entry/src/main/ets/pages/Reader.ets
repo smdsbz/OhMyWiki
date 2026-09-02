@@ -1,4 +1,5 @@
-import { HdsNavDestination, TextStyleMode } from '@kit.UIDesignKit';
+﻿import { HdsNavDestination, TextStyleMode, ScrollEffectType, BlurStrategy, hdsMaterial } from '@kit.UIDesignKit';
+import { LengthMetrics } from '@kit.ArkUI';
 import { AppStore } from '../common/AppStore';
 import { Logger } from '../common/Logger';
 import { WikiIndex } from '../data/WikiIndex';
@@ -228,19 +229,19 @@ export struct Reader {
             Progress({ value: this.progressDone, total: this.progressTotal, type: ProgressType.Linear })
               .width('70%')
               .height(6)
-              .color($r('app.color.link'))
-              .backgroundColor($r('app.color.surface'))
+              .color($r('sys.color.brand'))
+              .backgroundColor($r('sys.color.comp_background_secondary'))
             Text(`正在筛选 ${this.progressDone}/${this.progressTotal} 个页面…`)
               .fontSize(13)
-              .fontColor($r('app.color.text_tertiary'))
+              .fontColor($r('sys.color.font_tertiary'))
           } else {
             LoadingProgress()
               .width(40)
               .height(40)
-              .color($r('app.color.link'))
+              .color($r('sys.color.brand'))
             Text('加载页面…')
               .fontSize(13)
-              .fontColor($r('app.color.text_tertiary'))
+              .fontColor($r('sys.color.font_tertiary'))
           }
         }
         .layoutWeight(1)
@@ -254,7 +255,8 @@ export struct Reader {
             .padding(20)
           Button('返回首页')
             .fontSize(14)
-            .backgroundColor($r('app.color.link'))
+            .fontColor(Color.White)
+            .backgroundColor($r('sys.color.brand'))
             .onClick(() => {
               this.goHome();
             })
@@ -272,19 +274,19 @@ export struct Reader {
                     Progress({ value: this.progressDone, total: this.progressTotal, type: ProgressType.Linear })
                       .layoutWeight(1)
                       .height(4)
-                      .color($r('app.color.link'))
-                      .backgroundColor($r('app.color.accent_bg'))
+                      .color($r('sys.color.brand'))
+                      .backgroundColor($r('sys.color.comp_background_secondary'))
                     Text(`${this.progressDone}/${this.progressTotal} 页`)
                       .fontSize(11)
-                      .fontColor($r('app.color.text_tertiary'))
+                      .fontColor($r('sys.color.font_tertiary'))
                   } else {
                     LoadingProgress()
                       .width(16)
                       .height(16)
-                      .color($r('app.color.link'))
+                      .color($r('sys.color.brand'))
                     Text('正在查询…')
                       .fontSize(11)
-                      .fontColor($r('app.color.text_tertiary'))
+                      .fontColor($r('sys.color.font_tertiary'))
                   }
                 }
                 .width('100%')
@@ -295,8 +297,9 @@ export struct Reader {
               } })
             }
             .width('100%')
-            // 顶部让出 HDS 迷你标题栏（56vp）：滚动时内容从标题栏动态模糊下方穿过
-            .padding({ left: 14, right: 14, top: 56, bottom: 32 })
+            // 顶部让出「状态栏+迷你标题栏」全高（ignoreLayoutSafeArea 后视口含状态栏，
+            // 实测 104vp → 内容起于 y316；滚动时内容从模糊标题栏下方穿过）
+            .padding({ left: 14, right: 14, top: 104, bottom: 32 })
           }
           .layoutWeight(1)
           .scrollBar(BarState.Auto)
@@ -310,7 +313,8 @@ export struct Reader {
       }
       .width('100%')
       .height('100%')
-      .backgroundColor($r('app.color.page_bg'))
+      // 页面背景对齐系统设置：comp_background_gray（浅 #F0F3F5 / 深 #000000）
+      .backgroundColor($r('sys.color.comp_background_gray'))
       // 根容器背景延伸到导航条之下（内容视口的延伸由上方 Scroll 自己负责）
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
     }
@@ -329,8 +333,49 @@ export struct Reader {
             }
           }]
         }
+      },
+      style: {
+        // 官方沉浸式完整配方（指令要求强制最高档，无降级）：
+        // IMMERSIVE_GRADIENT_BLUR + 液态玻璃材质 IMMERSIVE/EXQUISITE（精致，最高级）
+        scrollEffectOpts: {
+          enableScrollEffect: true,
+          scrollEffectType: ScrollEffectType.IMMERSIVE_GRADIENT_BLUR,
+          // 过渡窗口 20→60vp：静止时保持纯净 originalStyle（默认 0 起步会让
+          // 材质尾带在零滚动时就罩住栏下首行内容）
+          blurEffectiveStartOffset: LengthMetrics.vp(20),
+          blurEffectiveEndOffset: LengthMetrics.vp(60)
+        },
+        systemMaterialEffect: {
+          materialType: hdsMaterial.MaterialType.IMMERSIVE,
+          materialLevel: hdsMaterial.MaterialLevel.EXQUISITE
+        },
+        blurStrategy: BlurStrategy.ENABLE,
+        originalStyle: {
+          // 对齐官方默认：blurRadius 配 systemMaterialEffect 时默认 12.0；
+          // maskExtraHeight 官方示例 56.0（蒙版延伸到栏外，衰减零点在栏下方）
+          backgroundStyle: { backgroundColor: $r('sys.color.comp_background_gray'), blurRadius: 24, maskExtraHeight: 100 },
+          // IMMERSIVE_GRADIENT_BLUR 默认标题为白色（图文沉浸场景假设），
+          // 页面为浅灰底需显式改深色，否则白底白字
+          contentStyle: {
+            titleStyle: { mainTitleColor: $r('sys.color.font_primary') },
+            menuStyle: { iconColor: $r('sys.color.font_primary'), textColor: $r('sys.color.font_primary') },
+            backIconStyle: { iconColor: $r('sys.color.font_primary') }
+          }
+        },
+        scrollEffectStyle: {
+          // maskExtraHeight 100：蒙版延伸到栏外，强模糊区覆盖全栏（含标题带）。
+          // 注：背景板色渲染在内容图层之下，半透明纱罩罩不住内容文字（实测），勿再尝试
+          backgroundStyle: { backgroundColor: Color.Transparent, blurRadius: 24, maskExtraHeight: 100 },
+          contentStyle: {
+            titleStyle: { mainTitleColor: $r('sys.color.font_primary') },
+            menuStyle: { iconColor: $r('sys.color.font_primary'), textColor: $r('sys.color.font_primary') },
+            backIconStyle: { iconColor: $r('sys.color.font_primary') }
+          }
+        }
       }
     })
+    // 官方沉浸式配方：放行安全区，内容才能延伸进底部导航条之下
+    .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
     .bindToScrollable([this.scroller])
     .onReady((ctx: NavDestinationContext) => {
       this.pathStack = ctx.pathStack;

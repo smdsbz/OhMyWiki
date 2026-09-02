@@ -1,4 +1,4 @@
-import { AbilityConstant, ConfigurationConstant, UIAbility, Want } from '@kit.AbilityKit';
+import { AbilityConstant, Configuration, ConfigurationConstant, UIAbility, Want } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
 import { util } from '@kit.ArkTS';
@@ -39,14 +39,36 @@ export default class EntryAbility extends UIAbility {
   onWindowStageCreate(windowStage: window.WindowStage): void {
     // Main window is created, set main page for this ability
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onWindowStageCreate');
+    this.windowStage = windowStage;
 
     windowStage.loadContent('pages/Index', (err) => {
       if (err.code) {
         hilog.error(DOMAIN, 'testTag', 'Failed to load the content. Cause: %{public}s', JSON.stringify(err));
         return;
       }
+      this.syncWindowBg();
       hilog.info(DOMAIN, 'testTag', 'Succeeded in loading the content.');
     });
+  }
+
+  private windowStage: window.WindowStage | null = null;
+
+  /** 窗口底色与页面背景（comp_background_gray）同步：状态栏区域显同色，无接缝 */
+  private syncWindowBg(): void {
+    if (this.windowStage === null) {
+      return;
+    }
+    try {
+      const dark = this.context.config.colorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK;
+      this.windowStage.getMainWindowSync().setWindowBackgroundColor(dark ? '#000000' : '#F0F3F5');
+    } catch (err) {
+      hilog.warn(DOMAIN, 'testTag', 'setWindowBackgroundColor failed: %{public}s', JSON.stringify(err));
+    }
+  }
+
+  onConfigurationUpdate(newConfig: Configuration): void {
+    // 深浅色切换时重新同步窗口底色
+    this.syncWindowBg();
   }
 
   onWindowStageDestroy(): void {
