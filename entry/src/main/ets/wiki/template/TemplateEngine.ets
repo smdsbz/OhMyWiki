@@ -44,6 +44,12 @@ const MAX_DEPTH = 10;
 /** 占位标记：\u0000OMPH:reason\u0000 */
 export const PLACEHOLDER_MARK = '\u0000OMPH:';
 
+/** 展开中的模板实参帧（#invoke 父框架实参继承用） */
+interface TemplateFrame {
+  positional: string[];
+  named: string[];
+}
+
 /**
  * 模板展开引擎：把 wikitext 中的 {{...}}（模板、解析函数、魔术字、
  * SMW 语义标注）展开为普通文本，供解析器继续处理。
@@ -52,9 +58,24 @@ export class TemplateEngine {
   private ctx: TemplateContext;
   /** 惰性 #ask/#show 全局自增 id */
   private static askSeq = 0;
+  /** 当前展开中的模板实参帧栈（单层即可：#invoke 只回溯最近一层模板实参） */
+  private frame: TemplateFrame | null = null;
 
   constructor(ctx: TemplateContext) {
     this.ctx = ctx;
+  }
+
+  /** 登记惰性 #ask/#show 查询并返回占位标记（渐进渲染）；
+   *  非惰性上下文返回空串，调用方应回退为立即执行。
+   *  供 #ask 解析函数与站点模块（#invoke 内部产生 SMW 查询）共用 */
+  static registerLazyAsk(ctx: TemplateContext, args: string[], isShow: boolean): string {
+    if (ctx.lazyAsk === true && ctx.pendingAsks !== undefined && ctx.pendingAsks !== null) {
+      TemplateEngine.askSeq++;
+      const pa: PendingAsk = { id: TemplateEngine.askSeq, args: args, isShow: isShow };
+      ctx.pendingAsks.push(pa);
+      return PLACEHOLDER_MARK + 'ASK:' + pa.id + '\u0000';
+    }
+    return '';
   }
 
   async expand(text: string): Promise<string> {
@@ -351,6 +372,17 @@ export class TemplateEngine {
       for (let i = 2; i < args.length; i++) {
         callArgs.push(args[i]);
       }
+      // 父框架实参继承（模拟 Lua Module:Arguments.getArgs 的父参数回溯）：
+      //  {{craft required item|物品名|数量}} 的模板体是 {{#invoke:collection|craftMaterials}}，
+      //  #invoke 自身无直接实参，取所在模板的实参
+      if (callArgs.length === 0 && this.frame !== null) {
+        for (const p of this.frame.positional) {
+          callArgs.push(p);
+        }
+        for (const nv of this.frame.named) {
+          callArgs.push(nv);
+        }
+      }
       if (this.ctx.invokeHandler !== null) {
         return await this.ctx.invokeHandler.invoke(module, func, callArgs, this.ctx);
       }
@@ -361,12 +393,11 @@ export class TemplateEngine {
       //  条件是「不在解析函数实参内」——实参内的结果会被同步消费（如 {{#expr:{{#show:…}}*2}}
       //  商店价格），必须立即执行，否则占位文本被当数值解析（价格变 0）；
       //  其余位置（页面顶层、模板体内）登记后回填即可，模板嵌套的深查询不再阻塞首帧
-      if (!inFnArg && this.ctx.lazyAsk === true &&
-        this.ctx.pendingAsks !== undefined && this.ctx.pendingAsks !== null) {
-        TemplateEngine.askSeq++;
-        const pa: PendingAsk = { id: TemplateEngine.askSeq, args: args, isShow: fname === '#show' };
-        this.ctx.pendingAsks.push(pa);
-        return PLACEHOLDER_MARK + 'ASK:' + pa.id + '\u0000';
+      if (!inFnArg) {
+        const mark = TemplateEngine.registerLazyAsk(this.ctx, args, fname === '#show');
+        if (mark.length > 0) {
+          return mark;
+        }
       }
       if (this.ctx.askHandler !== undefined && this.ctx.askHandler !== null) {
         return await this.ctx.askHandler.query(args, this.ctx, fname === '#show');
@@ -379,9 +410,14 @@ export class TemplateEngine {
           const eq = this.topLevelIndexOf(a, '=');
           if (eq > 0) {
             const prop = a.substring(0, eq).trim();
-            const value = a.substring(eq + 1).trim();
             if (prop.length > 0) {
-              this.ctx.capture(prop, value);
+              // 值先展开再捕获：模板参数代入后会残留 {{#ifeq:}}/{{#if:}} 等未求值
+              //  解析函数（如 采集道具2={{#if:X|物品:X}}），直接存原始串会把
+              //  wikitext 源码当属性值；空值跳过（SMW 空赋值不存储）
+              const value = (await this.expandInner(a.substring(eq + 1), depth + 1, stack, true)).trim();
+              if (value.length > 0) {
+                this.ctx.capture(prop, value);
+              }
             }
           }
         }
@@ -471,14 +507,27 @@ export class TemplateEngine {
     for (const a of args) {
       const eq = this.topLevelIndexOf(a, '=');
       if (eq > 0) {
-        named.set(a.substring(0, eq).trim(), a.substring(eq + 1));
+        // MediaWiki 语义：参数值去除首尾空白（含换行）——
+        //  `|概率1=35\n` 的尾随换行若保留，代入 [[..::35\n%]] 会产生跨行断链
+        named.set(a.substring(0, eq).trim(), a.substring(eq + 1).trim());
       } else {
-        positional.push(a);
+        positional.push(a.trim());
       }
     }
     const substituted = this.substituteParams(cleaned, named, positional);
     const newStack = stack.concat([name]);
-    return await this.expandInner(substituted, depth + 1, newStack, inFnArg);
+    // 模板体展开期间登记实参帧，供体内 #invoke 无直接实参时回溯（getArgs 语义）
+    const namedList: string[] = [];
+    named.forEach((v: string, k: string): void => {
+      namedList.push(k + '=' + v);
+    });
+    const prevFrame = this.frame;
+    this.frame = { positional: positional, named: namedList };
+    try {
+      return await this.expandInner(substituted, depth + 1, newStack, inFnArg);
+    } finally {
+      this.frame = prevFrame;
+    }
   }
 
   /** 参数替换：{{{key}}} / {{{key|default}}} / {{{1}}}；默认值支持嵌套 {{{...}}}（递归替换） */

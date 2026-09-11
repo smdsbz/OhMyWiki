@@ -43,6 +43,12 @@ interface InlineSeg {
 
 /** 行数达到该阈值的表格自动显示搜索框（任务/物品等 #ask 查询大表） */
 const TABLE_FILTER_MIN_ROWS = 10;
+/** 列数超过该阈值的宽表启用横向滚动（如采集点一览 10 列），避免列宽被压到逐字换行 */
+const WIDE_TABLE_MIN_COLS = 7;
+/** 宽表单列最小宽度（vp） */
+const TABLE_COL_MIN_VP = 86;
+/** 宽表冻结首列宽度（vp） */
+const WIDE_TABLE_FROZEN_W = 120;
 
 /**
  * wiki 节点树渲染器：把 WikiNode[] 渲染为 ArkUI 组件。
@@ -53,13 +59,18 @@ export struct WikiContentView {
   @Prop nodes: WikiNode[] = [];
   @Prop @Watch('onRenderKeyChange') renderKey: number = 0;
   @State tableFilters: Map<string, string> = new Map();
+  /** 宽表冻结列行高同步表（key: 表key_行号 → 滚动区实测行高 vp） */
+  @State wideRowH: Map<string, number> = new Map();
   onNavigate: (title: string) => void = (title: string) => {
   };
 
-  /** 页面切换（renderKey 变化）时清空表格过滤状态 */
+  /** 页面切换（renderKey 变化）时清空表格过滤状态与行高同步表 */
   onRenderKeyChange(): void {
     if (this.tableFilters.size > 0) {
       this.tableFilters = new Map();
+    }
+    if (this.wideRowH.size > 0) {
+      this.wideRowH = new Map();
     }
   }
 
@@ -419,7 +430,74 @@ export struct WikiContentView {
         .margin({ top: 8, bottom: 4 })
       }
       if (this.hasRowSpan(node)) {
-        this.renderTableGrid(node)
+        if (this.wideTableWidthVp(node) > 0) {
+          Scroll() {
+            Column() {
+              this.renderTableGrid(node)
+            }
+            .width(this.wideTableWidthVp(node))
+          }
+          .scrollable(ScrollDirection.Horizontal)
+          .scrollBar(BarState.Auto)
+          .width('100%')
+        } else {
+          this.renderTableGrid(node)
+        }
+      } else if (this.wideTableWidthVp(node) > 0) {
+        // 宽表：冻结首列 + 其余列横向滚动（ArkUI Scroll 无内建 sticky 列，
+        //  行高由滚动区 onAreaChange 量测回填冻结列，保证两侧行对齐）
+        Row() {
+          Column() {
+            ForEach(this.visibleRows(node, tKey), (item: TableRowPair, vIdx: number) => {
+              Column() {
+                this.renderInlineFlow(this.frozenCellOf(item.row)?.inline ?? [], '')
+              }
+              .width('100%')
+              .height(this.frozenRowH(tKey, item.ri))
+              .padding(6)
+              .backgroundColor(this.frozenCellOf(item.row)?.type === NodeType.TableHeaderCell ?
+              $r('app.color.table_header_bg') : $r('app.color.table_bg'))
+              .border({ width: 1, color: $r('app.color.table_border') })
+              .alignItems(HorizontalAlign.Start)
+            }, (item: TableRowPair, vIdx: number) => 'fcell_' + item.ri)
+          }
+          .width(WIDE_TABLE_FROZEN_W)
+          .border({ width: 1, color: $r('app.color.table_border_outer') })
+          .borderRadius({ topLeft: 4, bottomLeft: 4, topRight: 0, bottomRight: 0 })
+          .margin({ top: 8, bottom: 8 })
+
+          Scroll() {
+            Column() {
+              ForEach(this.visibleRows(node, tKey), (item: TableRowPair, vIdx: number) => {
+                // Stretch：同行单元格拉伸到最高格的高度，保持行内等高（对齐 HTML 表格行为）
+                Flex({ direction: FlexDirection.Row, alignItems: ItemAlign.Stretch }) {
+                  ForEach(this.bodyCellsOf(item.row), (cell: WikiNode, cIdx: number) => {
+                    Column() {
+                      this.renderInlineFlow(cell.inline ?? [], '')
+                    }
+                    .layoutWeight(cell.colSpan ?? 1)
+                    .padding(6)
+                    .backgroundColor(cell.type === NodeType.TableHeaderCell ? $r('app.color.table_header_bg') : $r('app.color.table_bg'))
+                    .border({ width: 1, color: $r('app.color.table_border') })
+                    .alignItems(HorizontalAlign.Start)
+                  }, (cell: WikiNode, cIdx: number) => 'cell' + item.ri + '_' + (cell.colIndex ?? 0))
+                }
+                .width('100%')
+                .onAreaChange((oldArea: Area, newArea: Area) => {
+                  this.syncRowH(tKey, item.ri, newArea.height);
+                })
+              }, (item: TableRowPair, vIdx: number) => 'frow_' + item.ri)
+            }
+            .width(this.wideBodyWidthVp(node))
+            .border({ width: 1, color: $r('app.color.table_border_outer') })
+            .borderRadius({ topLeft: 0, bottomLeft: 0, topRight: 4, bottomRight: 4 })
+            .margin({ top: 8, bottom: 8 })
+          }
+          .scrollable(ScrollDirection.Horizontal)
+          .scrollBar(BarState.Auto)
+          .layoutWeight(1)
+        }
+        .width('100%')
       } else {
         Column() {
           ForEach(this.visibleRows(node, tKey), (item: TableRowPair, vIdx: number) => {
@@ -491,6 +569,63 @@ export struct WikiContentView {
       }
     }
     return max;
+  }
+
+  /** 宽表判定：超过阈值列数时返回滚动内容总宽（vp），否则 0（不启用横向滚动） */
+  private wideTableWidthVp(node: WikiNode): number {
+    const cols = this.tableCols(node);
+    return cols > WIDE_TABLE_MIN_COLS ? cols * TABLE_COL_MIN_VP : 0;
+  }
+
+  /** 宽表滚动区内容宽度（vp）：除冻结首列外的列（rowspan Grid 路径无冻结列，用全宽） */
+  private wideBodyWidthVp(node: WikiNode): number {
+    const cols = this.tableCols(node);
+    return Math.max(1, cols - 1) * TABLE_COL_MIN_VP;
+  }
+
+  /** 冻结首列单元格（colIndex 0 的格；行内无首格时返回 null 渲染为空占位） */
+  private frozenCellOf(row: WikiNode): WikiNode | null {
+    const cells = (row.children ?? []) as WikiNode[];
+    for (let i = 0; i < cells.length; i++) {
+      if ((cells[i].colIndex ?? 0) === 0) {
+        return cells[i];
+      }
+    }
+    return null;
+  }
+
+  /** 滚动区单元格（除冻结首列外） */
+  private bodyCellsOf(row: WikiNode): WikiNode[] {
+    const cells = (row.children ?? []) as WikiNode[];
+    const out: WikiNode[] = [];
+    for (let i = 0; i < cells.length; i++) {
+      if ((cells[i].colIndex ?? 0) !== 0) {
+        out.push(cells[i]);
+      }
+    }
+    return out;
+  }
+
+  /** 冻结列行高：优先用滚动区实测值（vp），未量测到时自适应 */
+  private frozenRowH(tKey: string, ri: number): Length {
+    const h = this.wideRowH.get(tKey + '_r' + ri);
+    return h === undefined ? 'auto' : h;
+  }
+
+  /** 滚动区行高量测回填（冻结列与滚动区分属两棵子树，需同步行高保持对齐） */
+  private syncRowH(tKey: string, ri: number, h: Length): void {
+    const hv = typeof h === 'number' ? h : parseFloat(h as string);
+    if (isNaN(hv)) {
+      return;
+    }
+    const k = tKey + '_r' + ri;
+    const cur = this.wideRowH.get(k);
+    if (cur !== undefined && Math.abs(cur - hv) < 0.5) {
+      return;
+    }
+    const m = new Map(this.wideRowH);
+    m.set(k, hv);
+    this.wideRowH = m;
   }
 
   private colsTemplate(node: WikiNode): string {

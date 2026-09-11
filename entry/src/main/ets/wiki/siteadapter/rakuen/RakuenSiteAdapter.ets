@@ -3,6 +3,7 @@ import { InvokeHandler, TemplateContext, PLACEHOLDER_MARK } from '../../template
 import { SiteAdapter } from '../SiteAdapter';
 import { WikiSite } from '../../../model/WikiTypes';
 import { EnemyModule } from './EnemyModule';
+import { CollectionModule } from './CollectionModule';
 
 const TAG = 'RakuenSiteAdapter';
 
@@ -29,6 +30,8 @@ class RakuenModuleHost implements InvokeHandler {
       switch (lower) {
         case 'enemy':
           return await EnemyModule.invoke(func, args, ctx);
+        case 'collection':
+          return await CollectionModule.invoke(func, args, ctx);
         default:
           return PLACEHOLDER_MARK + 'Lua 模块 ' + module + ' 未实现（离线版暂不支持）' + '\u0000';
       }
