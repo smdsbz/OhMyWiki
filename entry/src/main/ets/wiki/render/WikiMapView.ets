@@ -57,7 +57,9 @@ export struct WikiMapView {
             .objectFit(ImageFit.Fill)
             .interpolation(ImageInterpolation.High)
           ForEach(this.markers, (m: MapMarker, idx: number) => {
-            // 百分比占位定位（空容器加 fontSize 确保参与布局）
+            // 百分比占位定位（空容器加 fontSize 确保参与布局）。
+            // Row 必须显式占满整宽：wrap-content 会被 Column 默认水平居中，
+            // left% 将相对居中后的半宽空间解析，打点整体右偏（真机实测：x = 左缘 + W/2 + L·W/200）
             Column() {
               Text('')
                 .fontSize(1)
@@ -75,10 +77,12 @@ export struct WikiMapView {
                   .shadow({ radius: 3, color: '#66000000', offsetX: 0, offsetY: 1 })
                   .margin({ left: -8 })
               }
+              .width('100%')
               .alignItems(VerticalAlign.Center)
             }
             .width('100%')
             .height('100%')
+            .alignItems(HorizontalAlign.Start)
           }, (m: MapMarker, idx: number) => 'mk' + idx + '_' + m.left.toFixed(2) + '_' + m.top.toFixed(2))
         }
         .width('100%')
