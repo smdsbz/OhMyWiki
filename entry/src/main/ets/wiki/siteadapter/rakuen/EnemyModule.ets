@@ -335,8 +335,10 @@ export class EnemyModule {
         }
         const marks: string[] = [];
         for (const g of byArea.get(area) as GmkEnemyJson[]) {
-          // 世界坐标 → 图内百分比（与原站 Xb2map 的 Leaflet bounds 取负一致）
-          const leftPct = (info.UpperX - (g.PosX as number)) / spanX * 100;
+          // 世界坐标 → 图内百分比。原站 Xb2map.js：底图 bounds（经角点交换）lat∈[-UpperZ,-LowerZ]、
+          // lng∈[-UpperX,-LowerX]，标记 latLng(-PosZ, PosX-(LowerX+UpperX))，
+          // 展开得 left=(PosX-LowerX)/spanX（X 向右增）、top=(PosZ-LowerZ)/spanZ（Z 向下增）
+          const leftPct = ((g.PosX as number) - info.LowerX) / spanX * 100;
           const topPct = ((g.PosZ as number) - info.LowerZ) / spanZ * 100;
           if (leftPct < -5 || leftPct > 105 || topPct < -5 || topPct > 105) {
             continue;

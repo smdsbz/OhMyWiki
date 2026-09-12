@@ -7,6 +7,9 @@ import { CollectionModule } from './CollectionModule';
 
 const TAG = 'RakuenSiteAdapter';
 
+/** 前端交互地图占位 div（multi-xb2map-collection）匹配：高亮物品名捕获组 */
+const ITEM_MAP_DIV_RE = /<div[^>]*class="[^"]*xb2map-collection[^"]*"[^>]*data-highlight-collection-item="([^"]*)"[^>]*><\/div>/g;
+
 /**
  * rakuen-database（xenoblade2.cn 转储）站点适配器。
  * 该站点的 {{#invoke}} 模块以 ArkTS 移植实现注册于此；
@@ -19,6 +22,12 @@ export class RakuenSiteAdapter implements SiteAdapter {
 
   createInvokeHandler(): InvokeHandler | null {
     return new RakuenModuleHost();
+  }
+
+  /** 站点前端 JS 交互地图的占位 div → 离线版静态地图模块调用
+   *  （div 在模板体内，一阶段展开后 {{FULLPAGENAME}} 已求值，此处改写后再展开一次） */
+  rewriteWikitext(text: string): string {
+    return text.replace(ITEM_MAP_DIV_RE, '{{#invoke:collection|itemMap|$1}}');
   }
 }
 

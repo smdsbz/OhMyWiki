@@ -4,7 +4,7 @@ import { AppStore } from '../common/AppStore';
 import { Logger } from '../common/Logger';
 import { WikiIndex } from '../data/WikiIndex';
 import { WikiNode } from '../model/WikiTypes';
-import { TemplateEngine, TemplateContext, PendingAsk, PLACEHOLDER_MARK } from '../wiki/template/TemplateEngine';
+import { TemplateEngine, TemplateContext, PendingAsk, PendingInvoke, PLACEHOLDER_MARK } from '../wiki/template/TemplateEngine';
 import { SmwQueryEngine } from '../wiki/smw/SmwQueryEngine';
 import { WikitextParser } from '../wiki/parser/WikitextParser';
 import { WikiContentView } from '../wiki/render/WikiContentView';
@@ -103,6 +103,7 @@ export struct Reader {
       this.redirectDepth = 0;
 
       const pending: PendingAsk[] = [];
+      const pendingInvokes: PendingInvoke[] = [];
       const ctx: TemplateContext = {
         pageTitle: title,
         index: index,
@@ -110,9 +111,20 @@ export struct Reader {
         askHandler: SmwQueryEngine.get(),
         lazyAsk: true,
         pendingAsks: pending,
+        pendingInvokes: pendingInvokes,
       };
       const engine = new TemplateEngine(ctx);
-      const expanded = await engine.expand(raw);
+      let expanded = await engine.expand(raw);
+      // 站点适配器改写（如交互地图占位 div → #invoke 模块调用）：改写后再展开一次
+      //（展开后的文本里模板均已扁平化，二次展开幂等且开销极小）
+      const adapter = AppStore.getActiveAdapter();
+      if (adapter !== null && adapter.rewriteWikitext !== undefined) {
+        const rewritten = adapter.rewriteWikitext(expanded);
+        if (rewritten !== expanded) {
+          Logger.info(TAG, 'adapter rewrite applied [' + title + ']');
+          expanded = await engine.expand(rewritten);
+        }
+      }
       Logger.info(TAG, 'EXPANDED [' + title + ']:\n' + expanded);
       const finalText = expanded;
       const parser = new WikitextParser(index, title);
@@ -123,9 +135,9 @@ export struct Reader {
       this.nodes = nodes;
       this.loading = false;
       this.pageSeq++;
-      // 阶段 2：后台执行惰性登记的查询，完成后回填刷新（渐进渲染）
-      if (pending.length > 0) {
-        this.runPendingAsks(title, index, expanded, pending);
+      // 阶段 2：后台执行惰性登记的查询/模块调用，完成后回填刷新（渐进渲染）
+      if (pending.length > 0 || pendingInvokes.length > 0) {
+        this.runPendingAsks(title, index, expanded, pending, pendingInvokes);
       }
     } catch (e) {
       Logger.error(TAG, 'loadPage error: ' + JSON.stringify(e));
@@ -134,10 +146,10 @@ export struct Reader {
     }
   }
 
-  /** 渐进渲染阶段 2：后台逐条执行惰性 #ask/#show，回填占位标记后一次性重新渲染。
+  /** 渐进渲染阶段 2：后台逐条执行惰性 #ask/#show 与模块延迟调用，回填占位标记后一次性重新渲染。
    *  askRunId 防重入：用户跳转到新页后旧协程丢弃结果 */
   private async runPendingAsks(title: string, index: WikiIndex, expanded: string,
-    pending: PendingAsk[]): Promise<void> {
+    pending: PendingAsk[], pendingInvokes: PendingInvoke[]): Promise<void> {
     this.askRunId++;
     const runId = this.askRunId;
     this.asking = true;
@@ -174,6 +186,23 @@ export struct Reader {
         const pad = pa.isShow ? '' : '\n';
         text = text.split(mark).join(pad + result + pad);
       }
+      for (const pi of pendingInvokes) {
+        if (this.askRunId !== runId) {
+          Logger.info(TAG, 'runPendingAsks [' + title + '] cancelled, invoke #' + pi.id);
+          return;
+        }
+        let result = '';
+        if (ctx.invokeHandler !== null) {
+          try {
+            result = await ctx.invokeHandler.invoke(pi.module, pi.func, pi.args, ctx);
+          } catch (e) {
+            Logger.warn(TAG, 'pending invoke failed #' + pi.id + ' ' + JSON.stringify(e));
+          }
+        }
+        const mark = PLACEHOLDER_MARK + 'INV:' + pi.id + '\u0000';
+        // 模块产出均为块级（地图/表格），前后补换行防粘连
+        text = text.split(mark).join('\n' + result + '\n');
+      }
       if (this.askRunId !== runId) {
         Logger.info(TAG, 'runPendingAsks [' + title + '] cancelled before render');
         return;
@@ -181,7 +210,8 @@ export struct Reader {
       const parser = new WikitextParser(index, title);
       this.nodes = parser.parse(text);
       this.pageSeq++;
-      Logger.info(TAG, 'runPendingAsks [' + title + '] done, asks=' + pending.length);
+      Logger.info(TAG, 'runPendingAsks [' + title + '] done, asks=' + pending.length +
+        ' invokes=' + pendingInvokes.length);
     } finally {
       this.asking = false;
     }

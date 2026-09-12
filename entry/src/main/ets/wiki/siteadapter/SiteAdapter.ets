@@ -11,6 +11,9 @@ export interface SiteAdapter {
   matches(site: WikiSite): boolean;
   /** 创建该站点的 {{#invoke:模块|函数|...}} 处理器；null 表示无模块能力（#invoke 走占位） */
   createInvokeHandler(): InvokeHandler | null;
+  /** 站点 wikitext 重写（可选，默认原样返回）：在一阶段模板展开后调用，
+   *  用于把站点特有的前端组件占位（如交互地图 div）改写为 #invoke 模块调用 */
+  rewriteWikitext?(text: string): string;
 }
 
 /**

@@ -44,7 +44,8 @@ interface AskQuery {
   format: string;
 }
 
-interface Row {
+/** 查询结果行（页面 + 语义属性）；供引擎渲染与站点模块（建地图等）结构化消费 */
+export interface Row {
   title: string;
   props: Map<string, string[]>;
 }
@@ -113,50 +114,70 @@ export class SmwQueryEngine implements AskHandler {
       if (isShow) {
         return await this.queryShow(expandedArgs, ctx);
       }
-      const q = this.parseQuery(expandedArgs);
-      const titles = this.collectTitles(q, ctx);
-      const rows: Row[] = [];
-      let lastFlushMs = Date.now();
-      const reportProgress = ctx.onProgress !== undefined && ctx.onProgress !== null;
-      for (let ti = 0; ti < titles.length; ti++) {
-        const props = await this.extractProps(titles[ti], ctx);
-        if (this.matches(q, props)) {
-          rows.push({ title: titles[ti], props: props });
-        }
-        // 进度回报：每 20 页或最后一页（Reader 侧 total≥30 才展示进度条）
-        if (reportProgress && ((ti + 1) % 20 === 0 || ti === titles.length - 1)) {
-          ctx.onProgress!(ti + 1, titles.length);
-        }
-        // 页面已销毁（用户退出）：立即中止扫描，已扫部分落盘（下次 load 预填，仅补扫缺页）
-        if (ctx.cancelled !== undefined && ctx.cancelled() === true) {
-          Logger.info(TAG, 'query cancelled at ' + (ti + 1) + '/' + titles.length);
-          this.flushProps();
-          return '';
-        }
-        // 周期落盘：长扫描无需等到结束，中途退出/进程被杀也能保住已扫部分
-        if (Date.now() - lastFlushMs > SCAN_FLUSH_INTERVAL_MS) {
-          this.flushProps();
-          lastFlushMs = Date.now();
-        }
-        // 定期让出主线程：防止同步展开段连续执行饿死渲染/输入（THREAD_BLOCK 根治）
-        if ((ti + 1) % 50 === 0 && ti !== titles.length - 1) {
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, 0);
-          });
-        }
-      }
-      Logger.info(TAG, 'query: titles=' + titles.length + ' matched=' + rows.length +
-        ' ns=' + q.nsPrefix + ' filters=' + JSON.stringify(q.propFilters));
-      this.flushProps();
-      this.sortRows(rows, q);
-      if (q.limit > 0 && rows.length > q.limit) {
-        rows.length = q.limit;
-      }
-      return await this.render(rows, q, ctx.index, ctx);
+      const rows = await this.queryRowsByArgs(expandedArgs, ctx);
+      return await this.render(rows, this.parseQuery(expandedArgs), ctx.index, ctx);
     } catch (e) {
       Logger.warn(TAG, 'query error: ' + JSON.stringify(e));
       return '';
     }
+  }
+
+  /** 结构化查询（站点模块用）：按 #ask 参数返回结果行（页面 + 属性），不渲染 */
+  async queryRows(args: string[], ctx: TemplateContext): Promise<Row[]> {
+    try {
+      const expandedArgs: string[] = [];
+      for (const a of args) {
+        expandedArgs.push(await this.expandQueryText(a, ctx));
+      }
+      return await this.queryRowsByArgs(expandedArgs, ctx);
+    } catch (e) {
+      Logger.warn(TAG, 'queryRows error: ' + JSON.stringify(e));
+      return [];
+    }
+  }
+
+  /** 展开后参数 → 过滤/排序/限行后的结果行（进度回报/取消/周期落盘与 query() 一致） */
+  private async queryRowsByArgs(expandedArgs: string[], ctx: TemplateContext): Promise<Row[]> {
+    const q = this.parseQuery(expandedArgs);
+    const titles = this.collectTitles(q, ctx);
+    const rows: Row[] = [];
+    let lastFlushMs = Date.now();
+    const reportProgress = ctx.onProgress !== undefined && ctx.onProgress !== null;
+    for (let ti = 0; ti < titles.length; ti++) {
+      const props = await this.extractProps(titles[ti], ctx);
+      if (this.matches(q, props)) {
+        rows.push({ title: titles[ti], props: props });
+      }
+      // 进度回报：每 20 页或最后一页（Reader 侧 total≥30 才展示进度条）
+      if (reportProgress && ((ti + 1) % 20 === 0 || ti === titles.length - 1)) {
+        ctx.onProgress!(ti + 1, titles.length);
+      }
+      // 页面已销毁（用户退出）：立即中止扫描，已扫部分落盘（下次 load 预填，仅补扫缺页）
+      if (ctx.cancelled !== undefined && ctx.cancelled() === true) {
+        Logger.info(TAG, 'query cancelled at ' + (ti + 1) + '/' + titles.length);
+        this.flushProps();
+        return rows;
+      }
+      // 周期落盘：长扫描无需等到结束，中途退出/进程被杀也能保住已扫部分
+      if (Date.now() - lastFlushMs > SCAN_FLUSH_INTERVAL_MS) {
+        this.flushProps();
+        lastFlushMs = Date.now();
+      }
+      // 定期让出主线程：防止同步展开段连续执行饿死渲染/输入（THREAD_BLOCK 根治）
+      if ((ti + 1) % 50 === 0 && ti !== titles.length - 1) {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 0);
+        });
+      }
+    }
+    Logger.info(TAG, 'query: titles=' + titles.length + ' matched=' + rows.length +
+      ' ns=' + q.nsPrefix + ' filters=' + JSON.stringify(q.propFilters));
+    this.flushProps();
+    this.sortRows(rows, q);
+    if (q.limit > 0 && rows.length > q.limit) {
+      rows.length = q.limit;
+    }
+    return rows;
   }
 
   /**

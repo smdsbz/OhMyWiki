@@ -21,6 +21,15 @@ export interface PendingAsk {
   isShow: boolean;
 }
 
+/** 惰性登记的 #invoke 延迟调用（渐进渲染：模块产出的重计算——如建图查询——
+ *  由 Reader 阶段 2 重新调用模块执行后回填占位标记） */
+export interface PendingInvoke {
+  id: number;
+  module: string;
+  func: string;
+  args: string[];
+}
+
 /** 模板展开上下文 */
 export interface TemplateContext {
   pageTitle: string;
@@ -36,6 +45,8 @@ export interface TemplateContext {
   lazyAsk?: boolean;
   /** 惰性模式下的查询登记表（由页面持有，阶段 2 逐条执行） */
   pendingAsks?: PendingAsk[];
+  /** 惰性模式下的模块延迟调用登记表（由页面持有，阶段 2 逐条执行） */
+  pendingInvokes?: PendingInvoke[];
   /** 取消信号（可选，返回 true 时长查询应尽快中止）：页面销毁后终止后台扫描 */
   cancelled?: () => boolean;
 }
@@ -74,6 +85,18 @@ export class TemplateEngine {
       const pa: PendingAsk = { id: TemplateEngine.askSeq, args: args, isShow: isShow };
       ctx.pendingAsks.push(pa);
       return PLACEHOLDER_MARK + 'ASK:' + pa.id + '\u0000';
+    }
+    return '';
+  }
+
+  /** 登记惰性 #invoke 延迟调用并返回占位标记；非惰性上下文返回空串（调用方立即执行）。
+   *  供站点模块把自身重计算（查询+建图等）推迟到 Reader 阶段 2，不阻塞首帧 */
+  static registerLazyInvoke(ctx: TemplateContext, module: string, func: string, args: string[]): string {
+    if (ctx.lazyAsk === true && ctx.pendingInvokes !== undefined && ctx.pendingInvokes !== null) {
+      TemplateEngine.askSeq++;
+      const pi: PendingInvoke = { id: TemplateEngine.askSeq, module: module, func: func, args: args };
+      ctx.pendingInvokes.push(pi);
+      return PLACEHOLDER_MARK + 'INV:' + pi.id + '\u0000';
     }
     return '';
   }

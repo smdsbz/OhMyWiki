@@ -182,6 +182,11 @@ export class AppStore {
     return AppStore.activeAdapter !== null ? AppStore.activeAdapter.createInvokeHandler() : null;
   }
 
+  /** 获取当前站点适配器（站点 wikitext 重写等能力；无适配站点返回 null） */
+  static getActiveAdapter(): SiteAdapter | null {
+    return AppStore.activeAdapter;
+  }
+
   /** 发现所有可用站点（遍历各数据源的顶层文件夹） */
   static async discoverSites(): Promise<WikiSite[]> {
     const result: WikiSite[] = [];

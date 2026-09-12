@@ -757,8 +757,8 @@ export struct WikiContentView {
 
   @Builder
   renderPlaceholder(node: WikiNode) {
-    if ((node.reason ?? '').startsWith('ASK:')) {
-      // 渐进渲染：查询后台执行中的占位
+    if (WikiContentView.isPendingReason(node.reason)) {
+      // 渐进渲染：查询/模块延迟调用后台执行中的占位
       Text('⏳ 数据加载中…')
         .fontSize(12)
         .fontColor($r('app.color.loading_text'))
@@ -773,6 +773,11 @@ export struct WikiContentView {
         .width('100%')
         .margin({ top: 4, bottom: 4 })
     }
+  }
+
+  /** 渐进渲染占位（ASK: 查询 / INV: 模块延迟调用）→ 加载态展示 */
+  private static isPendingReason(reason: string | undefined): boolean {
+    return (reason ?? '').startsWith('ASK:') || (reason ?? '').startsWith('INV:');
   }
 
   // ---------- 行内渲染 ----------
@@ -813,11 +818,11 @@ export struct WikiContentView {
         if (r.kind === 'image') {
           segs.push({ kind: 'image', fileName: r.fileName, width: r.width, height: r.height, align: r.align });
         } else if (r.kind === 'placeholder') {
-          // 连续的查询占位（同一处登记的多个 #ask）合并为一个加载提示，避免成串冗余
-          const isAsk = (r.reason ?? '').startsWith('ASK:');
+          // 连续的查询占位（同一处登记的多个 #ask/#invoke）合并为一个加载提示，避免成串冗余
+          const isAsk = WikiContentView.isPendingReason(r.reason);
           const last = segs.length > 0 ? segs[segs.length - 1] : null;
           const merged = isAsk && last !== null && last.kind === 'placeholder' &&
-            (last.reason ?? '').startsWith('ASK:');
+            WikiContentView.isPendingReason(last.reason);
           if (!merged) {
             segs.push({ kind: 'placeholder', reason: r.reason });
           }
@@ -921,8 +926,8 @@ export struct WikiContentView {
         .width('100%')
         .alignItems(HorizontalAlign.Center)
       } else if (seg.kind === 'placeholder') {
-        if ((seg.reason ?? '').startsWith('ASK:')) {
-          // 渐进渲染：查询后台执行中的占位（与块级 renderPlaceholder 同样式）
+        if (WikiContentView.isPendingReason(seg.reason)) {
+          // 渐进渲染：查询/模块延迟调用后台执行中的占位（与块级 renderPlaceholder 同样式）
           Text('⏳ 数据加载中…')
             .fontSize(12)
             .fontColor($r('app.color.loading_text'))
