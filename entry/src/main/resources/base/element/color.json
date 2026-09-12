@@ -83,6 +83,10 @@
     {
       "name": "error",
       "value": "#D0021B"
+    },
+    {
+      "name": "search_row_pressed",
+      "value": "#14000000"
     }
   ]
 }

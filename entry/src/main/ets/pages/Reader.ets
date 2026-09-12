@@ -1,4 +1,4 @@
-﻿import { HdsNavDestination, TextStyleMode, ScrollEffectType, BlurStrategy, hdsMaterial, IconStyleMode } from '@kit.UIDesignKit';
+﻿import { HdsNavDestination, TextStyleMode, ScrollEffectType, BlurStrategy, hdsMaterial, IconStyleMode, HdsNavigationMenuItemOptions } from '@kit.UIDesignKit';
 import { LengthMetrics, SymbolGlyphModifier } from '@kit.ArkUI';
 import { AppStore } from '../common/AppStore';
 import { Logger } from '../common/Logger';
@@ -247,6 +247,39 @@ export struct Reader {
     this.pathStack.pushPathByName('Search', params);
   }
 
+  /** 标题栏菜单：搜索图标常驻；「首页」按钮仅在非首页显示（站点首页上自引用无意义） */
+  private menuItems(): HdsNavigationMenuItemOptions[] {
+    const search: HdsNavigationMenuItemOptions = {
+      content: {
+        // SymbolGlyph 默认黑色，深色模式黑底黑字——显式跟随主题前景色
+        icon: new SymbolGlyphModifier($r('sys.symbol.magnifyingglass'))
+          .fontColor([$r('sys.color.font_primary')])
+          .fontWeight(FontWeight.Bold),
+        label: '搜索',
+        type: IconStyleMode.NORMAL,
+        action: (): void => {
+          this.openSearch();
+        }
+      }
+    };
+    if (this.pageTitle === this.startTitle && this.startTitle === '首页') {
+      return [search];
+    }
+    const home: HdsNavigationMenuItemOptions = {
+      content: {
+        icon: new SymbolGlyphModifier($r('sys.symbol.house'))
+          .fontColor([$r('sys.color.font_primary')])
+          .fontWeight(FontWeight.Bold),
+        label: '首页',
+        type: IconStyleMode.NORMAL,
+        action: (): void => {
+          this.goHome();
+        }
+      }
+    };
+    return [search, home];
+  }
+
   private displayTitle(): string {
     if (this.pageTitle.length === 0) {
       return '';
@@ -362,24 +395,7 @@ export struct Reader {
       content: {
         title: { mainTitle: this.displayTitle() },
         menu: {
-          value: [{
-            content: {
-              icon: new SymbolGlyphModifier($r('sys.symbol.magnifyingglass')),
-              label: '搜索',
-              type: IconStyleMode.NORMAL,
-              action: (): void => {
-                this.openSearch();
-              }
-            }
-          }, {
-            content: {
-              label: '首页',
-              type: TextStyleMode.NORMAL,
-              action: (): void => {
-                this.goHome();
-              }
-            }
-          }]
+          value: this.menuItems()
         }
       },
       style: {
