@@ -10,12 +10,23 @@ const TAG = 'RakuenSiteAdapter';
 /** 前端交互地图占位 div（multi-xb2map-collection）匹配：高亮物品名捕获组 */
 const ITEM_MAP_DIV_RE = /<div[^>]*class="[^"]*xb2map-collection[^"]*"[^>]*data-highlight-collection-item="([^"]*)"[^>]*><\/div>/g;
 
+/** 搜索直达排除的命名空间前缀：MediaWiki/SMW 标准设施（本地化名）+
+ *  扩展命名空间（Gadget/JSON）+ 本站 Project 元页（免责声明/捐助等）。
+ *  内容页（主命名空间与游戏数据命名空间）不受影响 */
+const SEARCH_EXCLUDED_NS: string[] = [
+  '文件:', '模板:', '模块:', '分类:', '属性:', 'MediaWiki:',
+  '用户:', '用户讨论:', 'smw/schema:', 'Gadget:', 'Gadget definition:',
+  'JSON:', '帮助:', '项目:', '乐园数据管理室:',
+];
+
 /**
  * rakuen-database（xenoblade2.cn 转储）站点适配器。
  * 该站点的 {{#invoke}} 模块以 ArkTS 移植实现注册于此；
  * 后续通用 Lua 虚拟机落地后，可替换为数据驱动实现而不动引擎。
  */
 export class RakuenSiteAdapter implements SiteAdapter {
+  readonly searchExcludedNs: string[] = SEARCH_EXCLUDED_NS;
+
   matches(site: WikiSite): boolean {
     return site.name === 'rakuen-database';
   }

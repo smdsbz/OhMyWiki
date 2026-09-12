@@ -14,6 +14,9 @@ export interface SiteAdapter {
   /** 站点 wikitext 重写（可选，默认原样返回）：在一阶段模板展开后调用，
    *  用于把站点特有的前端组件占位（如交互地图 div）改写为 #invoke 模块调用 */
   rewriteWikitext?(text: string): string;
+  /** 搜索直达排除的命名空间前缀（可选，默认不过滤）：站点自行声明哪些命名空间
+   *  是基础设施（模板/模块/文件/数据页等），引擎不内置任何站点知识 */
+  searchExcludedNs?: string[];
 }
 
 /**

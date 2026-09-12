@@ -9,6 +9,7 @@ import { Logger } from '../common/Logger';
 import { Prefs } from '../common/Prefs';
 import { WikiSite } from '../model/WikiTypes';
 import { Reader, ReaderParams } from './Reader';
+import { SearchPage } from './SearchPage';
 
 const TAG = 'Index';
 /** 内容顶部让位量：ignoreLayoutSafeArea(TOP) 后视口含状态栏，
@@ -348,6 +349,11 @@ struct Index {
         siteKey: (param as ReaderParams).siteKey,
         siteName: (param as ReaderParams).siteName,
         startTitle: (param as ReaderParams).title ?? '首页'
+      })
+    } else if (name === 'Search') {
+      SearchPage({
+        siteKey: (param as ReaderParams).siteKey,
+        siteName: (param as ReaderParams).siteName
       })
     }
   }

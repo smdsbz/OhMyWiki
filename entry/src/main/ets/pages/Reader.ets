@@ -1,5 +1,5 @@
-﻿import { HdsNavDestination, TextStyleMode, ScrollEffectType, BlurStrategy, hdsMaterial } from '@kit.UIDesignKit';
-import { LengthMetrics } from '@kit.ArkUI';
+﻿import { HdsNavDestination, TextStyleMode, ScrollEffectType, BlurStrategy, hdsMaterial, IconStyleMode } from '@kit.UIDesignKit';
+import { LengthMetrics, SymbolGlyphModifier } from '@kit.ArkUI';
 import { AppStore } from '../common/AppStore';
 import { Logger } from '../common/Logger';
 import { WikiIndex } from '../data/WikiIndex';
@@ -238,6 +238,15 @@ export struct Reader {
     this.pathStack.popToName('Reader');
   }
 
+  /** 打开站内搜索页（复用 ReaderParams 结构，无 title） */
+  openSearch(): void {
+    const params: ReaderParams = {
+      siteKey: this.siteKey,
+      siteName: this.siteName,
+    };
+    this.pathStack.pushPathByName('Search', params);
+  }
+
   private displayTitle(): string {
     if (this.pageTitle.length === 0) {
       return '';
@@ -354,6 +363,15 @@ export struct Reader {
         title: { mainTitle: this.displayTitle() },
         menu: {
           value: [{
+            content: {
+              icon: new SymbolGlyphModifier($r('sys.symbol.magnifyingglass')),
+              label: '搜索',
+              type: IconStyleMode.NORMAL,
+              action: (): void => {
+                this.openSearch();
+              }
+            }
+          }, {
             content: {
               label: '首页',
               type: TextStyleMode.NORMAL,

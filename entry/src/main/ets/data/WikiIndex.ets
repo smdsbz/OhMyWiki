@@ -205,6 +205,51 @@ export class WikiIndex {
     return out;
   }
 
+  /** 标题搜索（大小写不敏感）：精确匹配 > 全名前缀 > 命名空间内页名前缀 > 包含；
+   *  同层内短标题优先（更可能是目标页）。
+   *  excludePrefixes 为命名空间前缀黑名单（站点适配器声明，引擎不内置站点知识）。
+   *  供顶栏搜索直达使用 */
+  searchTitles(query: string, limit: number, excludePrefixes?: string[]): string[] {
+    const q = query.trim().toLowerCase();
+    if (q.length === 0) {
+      return [];
+    }
+    const exclude = excludePrefixes ?? [];
+    const isExcluded = (t: string): boolean => {
+      if (exclude.length === 0) {
+        return false;
+      }
+      const ci = t.indexOf(':');
+      return ci >= 0 && exclude.indexOf(t.substring(0, ci + 1)) >= 0;
+    };
+    const exact: string[] = [];
+    const prefix: string[] = [];
+    const nsPrefix: string[] = [];
+    const contains: string[] = [];
+    for (const t of this.titleToPath.keys()) {
+      if (isExcluded(t)) {
+        continue;
+      }
+      const lt = t.toLowerCase();
+      const ci = lt.indexOf(':');
+      const name = ci >= 0 ? lt.substring(ci + 1) : lt;
+      if (name === q || lt === q) {
+        exact.push(t);
+      } else if (name.startsWith(q)) {
+        (name === lt ? prefix : nsPrefix).push(t);
+      } else if (lt.includes(q)) {
+        contains.push(t);
+      }
+    }
+    const byLen = (a: string, b: string): number => a.length - b.length || (a < b ? -1 : 1);
+    exact.sort(byLen);
+    prefix.sort(byLen);
+    nsPrefix.sort(byLen);
+    contains.sort(byLen);
+    const all = exact.concat(prefix, nsPrefix, contains);
+    return all.slice(0, limit);
+  }
+
   imageExists(fileName: string): boolean {
     // 懒加载改造后不再维护全量清单；仅同步判定缓存已知结果，未知返回 true（由 readImageBinary 实际探测）
     return this.imageResolveCache.get(fileName.split('/').pop() ?? fileName) !== null;
