@@ -13,6 +13,8 @@ interface InlineRun {
   align?: string;
   reason?: string;
   style: number; // 1=bold 2=italic
+  color?: string; // 行内颜色（继承自 Color 节点）
+  fontSize?: number; // 行内字号（继承自 <small>/<big>）
 }
 
 /** 表格行 + 原始行号（过滤后保持稳定 key） */
@@ -28,6 +30,8 @@ interface RichSpan {
   italic: boolean;
   link: boolean;
   target: string;
+  color: string; // 行内颜色（'' = 默认）
+  fontSize?: number; // 行内字号（0/未设 = 默认）
 }
 
 /** 行内渲染段：连续 text/link 合并为一个 rich 段（单个 Text 内多 Span，支持段内自然换行） */
@@ -197,13 +201,15 @@ export struct WikiContentView {
   }
 
   /** 构建行内渲染单元（按链接/图片/占位/换行切分） */
-  private buildRuns(inline: WikiNode[], style: number): InlineRun[] {
+  private buildRuns(inline: WikiNode[], style: number, color: string,
+    fontSize: number): InlineRun[] {
     const runs: InlineRun[] = [];
     let current: WikiNode[] = [];
 
     const flush = (): void => {
       if (current.length > 0) {
-        runs.push({ kind: 'text', inline: current, style: style });
+        runs.push({ kind: 'text', inline: current, style: style, color: color,
+          fontSize: fontSize > 0 ? fontSize : undefined });
         current = [];
       }
     };
@@ -212,17 +218,20 @@ export struct WikiContentView {
       const t = tok.type;
       if (t === NodeType.Text) {
         current.push(tok);
-      } else if (t === NodeType.Bold || t === NodeType.Italic || t === NodeType.BoldItalic) {
+      } else if (t === NodeType.Bold || t === NodeType.Italic || t === NodeType.BoldItalic ||
+        t === NodeType.Color) {
         if (this.containsInteractive(tok.inline ?? [])) {
           flush();
           let childStyle = style;
-          if (t === NodeType.Bold) {
+          if (t === NodeType.Bold || t === NodeType.BoldItalic) {
             childStyle |= 1;
           }
-          if (t === NodeType.Italic) {
+          if (t === NodeType.Italic || t === NodeType.BoldItalic) {
             childStyle |= 2;
           }
-          const childRuns = this.buildRuns(tok.inline ?? [], childStyle);
+          const childColor = t === NodeType.Color && tok.color !== undefined ? tok.color : color;
+          const childSize = t === NodeType.Color && tok.fontSize !== undefined ? tok.fontSize : fontSize;
+          const childRuns = this.buildRuns(tok.inline ?? [], childStyle, childColor, childSize);
           for (const r of childRuns) {
             runs.push(r);
           }
@@ -231,7 +240,8 @@ export struct WikiContentView {
         }
       } else if (t === NodeType.Link) {
         flush();
-        runs.push({ kind: 'link', inline: tok.inline ?? [], target: tok.target, style: style });
+        runs.push({ kind: 'link', inline: tok.inline ?? [], target: tok.target, style: style,
+          color: color, fontSize: fontSize > 0 ? fontSize : undefined });
       } else if (t === NodeType.FileImage) {
         flush();
         runs.push({
@@ -263,8 +273,8 @@ export struct WikiContentView {
         t === NodeType.LineBreak) {
         return true;
       }
-      if ((t === NodeType.Bold || t === NodeType.Italic || t === NodeType.BoldItalic) &&
-        this.containsInteractive(tok.inline ?? [])) {
+      if ((t === NodeType.Bold || t === NodeType.Italic || t === NodeType.BoldItalic ||
+        t === NodeType.Color) && this.containsInteractive(tok.inline ?? [])) {
         return true;
       }
     }
@@ -507,7 +517,7 @@ export struct WikiContentView {
                 Column() {
                   this.renderInlineFlow(cell.inline ?? [], '')
                 }
-                .layoutWeight(cell.colSpan ?? 1)
+                .layoutWeight(this.colWeight(node, cell))
                 .padding(6)
                 .backgroundColor(cell.type === NodeType.TableHeaderCell ? $r('app.color.table_header_bg') : $r('app.color.table_bg'))
                 .border({ width: 1, color: $r('app.color.table_border') })
@@ -526,6 +536,47 @@ export struct WikiContentView {
       .width('100%')
       .alignItems(HorizontalAlign.Start)
     }
+  }
+
+  /** rich 段行高：普通正文 22；纯小字号段（斩位条等装饰）收紧到 13（忽略换行 span） */
+  private segLineHeight(spans: RichSpan[]): number {
+    let allSmall = false;
+    let sawText = false;
+    for (const sp of spans) {
+      if (sp.text.trim().length === 0) {
+        continue;
+      }
+      sawText = true;
+      if ((sp.fontSize ?? 0) === 0 || (sp.fontSize as number) > 12) {
+        allSmall = false;
+        break;
+      }
+      allSmall = true;
+    }
+    return sawText && allSmall ? 13 : 22;
+  }
+
+  /** 单元格布局权重：优先用表头声明的列宽百分比（width="50%"），
+   *  按 colIndex 匹配（跨列格累加跨度内各列宽）；无声明回退跨列数。
+   *  单列宽度下限 14：窄屏下 4%~8% 的列连三位数/粗体数字都会竖排折行 */
+  private colWeight(node: WikiNode, cell: WikiNode): number {
+    const rows = (node.children ?? []) as WikiNode[];
+    if (rows.length === 0) {
+      return cell.colSpan ?? 1;
+    }
+    const headerCells = (rows[0].children ?? []) as WikiNode[];
+    const span = cell.colSpan ?? 1;
+    const ci = cell.colIndex ?? 0;
+    let w = 0;
+    let found = false;
+    for (const h of headerCells) {
+      const hci = h.colIndex ?? 0;
+      if (hci >= ci && hci < ci + span && h.widthPct !== undefined) {
+        w += Math.max(h.widthPct as number, 14);
+        found = true;
+      }
+    }
+    return found && w > 0 ? w : span;
   }
 
   /** 表格是否含 rowspan 单元格（需要 Grid 显式跨行渲染） */
@@ -794,7 +845,7 @@ export struct WikiContentView {
    *  换行发生在文字内部而非元素边界，修复"链接/标号独占一行"）；<br> 忠实渲染为换行，
    *  以 Span('\n') 并入同一 Text（仅调整换行的渲染方式，不改数据语义）；图片/占位保持独立段 */
   private buildSegments(inline: WikiNode[], prefix: string): InlineSeg[] {
-    const runs = this.buildRuns(inline, 0);
+    const runs = this.buildRuns(inline, 0, '', 0);
     const segs: InlineSeg[] = [];
     let buf: RichSpan[] = [];
     const flushRich = (): void => {
@@ -806,13 +857,14 @@ export struct WikiContentView {
     for (const r of runs) {
       if (r.kind === 'text' || r.kind === 'link') {
         const isLink = r.kind === 'link';
-        const spans = this.flattenRich(r.inline ?? [], r.style, isLink, isLink ? (r.target ?? '') : '');
+        const spans = this.flattenRich(r.inline ?? [], r.style, isLink,
+          isLink ? (r.target ?? '') : '', r.color ?? '', r.fontSize ?? 0);
         for (const s of spans) {
           buf.push(s);
         }
       } else if (r.kind === 'break') {
         // <br>：并入当前 rich 段为换行符（同一 Text 内换行，行高一致）
-        buf.push({ text: '\n', bold: false, italic: false, link: false, target: '' });
+        buf.push({ text: '\n', bold: false, italic: false, link: false, target: '', color: '' });
       } else {
         flushRich();
         if (r.kind === 'image') {
@@ -834,7 +886,7 @@ export struct WikiContentView {
     flushRich();
     // 列表标号并入首个 rich 段（避免标号单独占一行）
     if (prefix.length > 0) {
-      const mk: RichSpan = { text: prefix, bold: false, italic: false, link: false, target: '' };
+      const mk: RichSpan = { text: prefix, bold: false, italic: false, link: false, target: '', color: '' };
       const first = segs.length > 0 ? segs[0] : null;
       if (first !== null && first.kind === 'rich' && first.spans !== undefined) {
         first.spans.unshift(mk);
@@ -853,25 +905,31 @@ export struct WikiContentView {
     for (const s of spans) {
       const last = merged.length > 0 ? merged[merged.length - 1] : null;
       if (last !== null && last.bold === s.bold && last.italic === s.italic &&
-        last.link === s.link && last.target === s.target) {
+        last.link === s.link && last.target === s.target && last.color === s.color &&
+        (last.fontSize ?? 0) === (s.fontSize ?? 0)) {
         last.text += s.text;
       } else {
-        merged.push({ text: s.text, bold: s.bold, italic: s.italic, link: s.link, target: s.target });
+        merged.push({ text: s.text, bold: s.bold, italic: s.italic, link: s.link,
+          target: s.target, color: s.color, fontSize: s.fontSize });
       }
     }
     return merged;
   }
 
   /** 展平行内节点为富文本 Span（保留链接标记与样式） */
-  private flattenRich(inline: WikiNode[], style: number, link: boolean, target: string): RichSpan[] {
+  private flattenRich(inline: WikiNode[], style: number, link: boolean, target: string,
+    color: string, fontSize: number): RichSpan[] {
     const out: RichSpan[] = [];
     const bold = (style & 1) !== 0;
     const italic = (style & 2) !== 0;
+    const size = fontSize > 0 ? fontSize : undefined;
     for (const tok of inline) {
       const t = tok.type;
       if (t === NodeType.Text) {
-        out.push({ text: tok.text ?? '', bold: bold, italic: italic, link: link, target: target });
-      } else if (t === NodeType.Bold || t === NodeType.Italic || t === NodeType.BoldItalic) {
+        out.push({ text: tok.text ?? '', bold: bold, italic: italic, link: link, target: target,
+          color: color, fontSize: size });
+      } else if (t === NodeType.Bold || t === NodeType.Italic || t === NodeType.BoldItalic ||
+        t === NodeType.Color) {
         let cs = style;
         if (t === NodeType.Bold || t === NodeType.BoldItalic) {
           cs |= 1;
@@ -879,17 +937,20 @@ export struct WikiContentView {
         if (t === NodeType.Italic || t === NodeType.BoldItalic) {
           cs |= 2;
         }
-        const sub = this.flattenRich(tok.inline ?? [], cs, link, target);
+        const cc = t === NodeType.Color && tok.color !== undefined ? tok.color : color;
+        const csize = t === NodeType.Color && tok.fontSize !== undefined ? tok.fontSize : fontSize;
+        const sub = this.flattenRich(tok.inline ?? [], cs, link, target, cc, csize);
         for (const s of sub) {
           out.push(s);
         }
       } else if (t === NodeType.Link) {
-        const sub = this.flattenRich(tok.inline ?? [], style, true, tok.target ?? '');
+        const sub = this.flattenRich(tok.inline ?? [], style, true, tok.target ?? '', color, fontSize);
         for (const s of sub) {
           out.push(s);
         }
       } else {
-        out.push({ text: tok.text ?? '', bold: bold, italic: italic, link: link, target: target });
+        out.push({ text: tok.text ?? '', bold: bold, italic: italic, link: link, target: target,
+          color: color, fontSize: size });
       }
     }
     return out;
@@ -904,7 +965,9 @@ export struct WikiContentView {
             Span(sp.text)
               .fontWeight(sp.bold ? FontWeight.Bold : FontWeight.Normal)
               .fontStyle(sp.italic ? FontStyle.Italic : FontStyle.Normal)
-              .fontColor(sp.link ? $r('app.color.link') : $r('app.color.text_body'))
+              .fontColor(sp.color.length > 0 ? sp.color :
+                (sp.link ? $r('app.color.link') : $r('app.color.text_body')))
+              .fontSize((sp.fontSize ?? 0) > 0 ? sp.fontSize : 15)
               .decoration(sp.link
                 ? { type: TextDecorationType.Underline, color: $r('app.color.link') }
                 : { type: TextDecorationType.None })
@@ -916,15 +979,21 @@ export struct WikiContentView {
           }, (sp: RichSpan, si: number) => 'sp' + idx + '_' + si)
         }
         .fontSize(15)
-        .lineHeight(22)
+        .lineHeight(this.segLineHeight(seg.spans ?? []))
       } else if (seg.kind === 'image') {
-        // 块级图片：全宽容器居中，固定宽（限宽/限高注释）图片水平居中，铺满图不受影响
-        Column() {
+        if ((seg.width ?? 0) > 0 && (seg.width as number) <= 64) {
+          // 小尺寸注释（≤64px）的行内图标：随文字流内联，不独占一行
           WikiImage({ fileName: seg.fileName ?? '', fileWidth: seg.width ?? 0,
-            fileHeight: seg.height ?? 0, block: true })
+            fileHeight: seg.height ?? 0, block: false })
+        } else {
+          // 块级图片：全宽容器居中，固定宽（限宽/限高注释）图片水平居中，铺满图不受影响
+          Column() {
+            WikiImage({ fileName: seg.fileName ?? '', fileWidth: seg.width ?? 0,
+              fileHeight: seg.height ?? 0, block: true })
+          }
+          .width('100%')
+          .alignItems(HorizontalAlign.Center)
         }
-        .width('100%')
-        .alignItems(HorizontalAlign.Center)
       } else if (seg.kind === 'placeholder') {
         if (WikiContentView.isPendingReason(seg.reason)) {
           // 渐进渲染：查询/模块延迟调用后台执行中的占位（与块级 renderPlaceholder 同样式）
@@ -953,29 +1022,39 @@ export struct WikiContentView {
   }
 
   /** 把行内节点展平为带样式的文本片段 */
-  private flattenInline(inline: WikiNode[], bold: boolean, italic: boolean): StyledText[] {
+  private flattenInline(inline: WikiNode[], bold: boolean, italic: boolean,
+    color: string, fontSize: number): StyledText[] {
     const out: StyledText[] = [];
     for (const tok of inline) {
       const t = tok.type;
       if (t === NodeType.Text) {
-        out.push({ text: tok.text ?? '', bold: bold, italic: italic });
+        out.push({ text: tok.text ?? '', bold: bold, italic: italic, color: color,
+          fontSize: fontSize > 0 ? fontSize : 0 });
       } else if (t === NodeType.Bold) {
-        const sub = this.flattenInline(tok.inline ?? [], true, italic);
+        const sub = this.flattenInline(tok.inline ?? [], true, italic, color, fontSize);
         for (const s of sub) {
           out.push(s);
         }
       } else if (t === NodeType.Italic) {
-        const sub = this.flattenInline(tok.inline ?? [], bold, true);
+        const sub = this.flattenInline(tok.inline ?? [], bold, true, color, fontSize);
         for (const s of sub) {
           out.push(s);
         }
       } else if (t === NodeType.BoldItalic) {
-        const sub = this.flattenInline(tok.inline ?? [], true, true);
+        const sub = this.flattenInline(tok.inline ?? [], true, true, color, fontSize);
+        for (const s of sub) {
+          out.push(s);
+        }
+      } else if (t === NodeType.Color) {
+        const sub = this.flattenInline(tok.inline ?? [], bold, italic,
+          tok.color !== undefined ? tok.color : color,
+          tok.fontSize !== undefined ? tok.fontSize : fontSize);
         for (const s of sub) {
           out.push(s);
         }
       } else {
-        out.push({ text: tok.text ?? '', bold: bold, italic: italic });
+        out.push({ text: tok.text ?? '', bold: bold, italic: italic, color: color,
+          fontSize: fontSize > 0 ? fontSize : 0 });
       }
     }
     return out;
@@ -983,10 +1062,22 @@ export struct WikiContentView {
 
   @Builder
   renderSpans(inline: WikiNode[]) {
-    ForEach(this.flattenInline(inline, false, false), (frag: StyledText, idx: number) => {
-      Span(frag.text)
-        .fontWeight(frag.bold ? FontWeight.Bold : FontWeight.Normal)
-        .fontStyle(frag.italic ? FontStyle.Italic : FontStyle.Normal)
+    ForEach(this.flattenInline(inline, false, false, '', 0), (frag: StyledText, idx: number) => {
+      if (frag.color.length > 0) {
+        Span(frag.text)
+          .fontWeight(frag.bold ? FontWeight.Bold : FontWeight.Normal)
+          .fontStyle(frag.italic ? FontStyle.Italic : FontStyle.Normal)
+          .fontColor(frag.color)
+      } else if ((frag.fontSize ?? 0) > 0) {
+        Span(frag.text)
+          .fontWeight(frag.bold ? FontWeight.Bold : FontWeight.Normal)
+          .fontStyle(frag.italic ? FontStyle.Italic : FontStyle.Normal)
+          .fontSize(frag.fontSize)
+      } else {
+        Span(frag.text)
+          .fontWeight(frag.bold ? FontWeight.Bold : FontWeight.Normal)
+          .fontStyle(frag.italic ? FontStyle.Italic : FontStyle.Normal)
+      }
     }, (frag: StyledText, idx: number) => 's' + idx)
   }
 }
@@ -996,6 +1087,8 @@ interface StyledText {
   text: string;
   bold: boolean;
   italic: boolean;
+  color: string;
+  fontSize: number;
 }
 
 /** 表格单元格（含所在行号，供 Grid 显式定位） */

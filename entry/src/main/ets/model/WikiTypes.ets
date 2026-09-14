@@ -32,6 +32,7 @@ export enum NodeType {
   Bold = 'bold',
   Italic = 'italic',
   BoldItalic = 'boldItalic',
+  Color = 'color',
   Heading = 'heading',
   Paragraph = 'paragraph',
   UnorderedList = 'ul',
@@ -73,6 +74,10 @@ export interface WikiNode {
   level?: number;
   /** 行内子节点（段落、标题、单元格、列表项） */
   inline?: WikiNode[];
+  /** 行内颜色（Color 节点：#rrggbb） */
+  color?: string;
+  /** 行内字号（Color 节点承载 <small>/<big>：<small> 固定 12） */
+  fontSize?: number;
   /** 块级子节点（列表、表格、模板展开结果） */
   children?: WikiNode[];
   /** 链接解析后的目标标题 */
@@ -103,6 +108,8 @@ export interface WikiNode {
   rowSpan?: number;
   /** 单元格列位置（解析表格时按 rowspan 占位计算） */
   colIndex?: number;
+  /** 表头声明的列宽百分比（如 width="50%"），按比例分配列宽 */
+  widthPct?: number;
   /** 地图区域名（对应 Mapinfo Name，如 ma02a_f01） */
   /** 地图底图文件名（由模块输出时拼好，引擎不感知站点命名规则） */
   mapImage?: string;

@@ -12,17 +12,25 @@ export default class EntryAbility extends UIAbility {
     } catch (err) {
       hilog.error(DOMAIN, 'testTag', 'Failed to set colorMode. Cause: %{public}s', JSON.stringify(err));
     }
-    // 调试直达：aa start --ps pageB64 <base64(UTF-8 页名)>，站点加载后 Index 自动跳转
+    // 调试直达：aa start --ps pageB64 <base64(UTF-8 页名)> [--ps siteB64 <base64(站点名)>]，站点加载后 Index 自动跳转
     try {
       const p = want.parameters;
       if (p !== undefined && p !== null) {
+        const helper = new util.Base64Helper();
+        const decoder = new util.TextDecoder('utf-8');
         const b64 = p.pageB64;
         if (typeof b64 === 'string' && b64.length > 0) {
-          const bytes = new util.Base64Helper().decodeSync(b64);
-          const text = new util.TextDecoder('utf-8').decodeWithStream(bytes);
+          const text = decoder.decodeWithStream(helper.decodeSync(b64));
           if (text.trim().length > 0) {
             AppStorage.setOrCreate('debugJumpPage', text.trim());
             hilog.info(DOMAIN, 'testTag', 'debugJumpPage=%{public}s', text);
+          }
+        }
+        const site = p.siteB64;
+        if (typeof site === 'string' && site.length > 0) {
+          const siteName = decoder.decodeWithStream(helper.decodeSync(site));
+          if (siteName.trim().length > 0) {
+            AppStorage.setOrCreate('debugJumpSite', siteName.trim());
           }
         }
       }

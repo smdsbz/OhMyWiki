@@ -1,0 +1,8 @@
+cache/
+pages/
+images/
+manifest.json
+summary.json
+images.json
+__pycache__/
+*.zip

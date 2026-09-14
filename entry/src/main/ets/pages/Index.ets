@@ -160,9 +160,22 @@ struct Index {
       return;
     }
     AppStorage.setOrCreate('debugJumpPage', '');
-    let target: SiteItem | null = items.length > 0 ? items[0] : null;
+    const siteName = AppStorage.get<string>('debugJumpSite') ?? '';
+    AppStorage.setOrCreate('debugJumpSite', '');
+    let target: SiteItem | null = null;
+    if (siteName.length > 0) {
+      for (const it of items) {
+        if (it.site.name === siteName) {
+          target = it;
+          break;
+        }
+      }
+    }
+    if (target === null && items.length > 0) {
+      target = items[0];
+    }
     if (target !== null) {
-      Logger.info(TAG, 'debug jump -> ' + page);
+      Logger.info(TAG, 'debug jump -> ' + target.site.name + ':' + page);
       await this.openSite(target, page);
     }
   }

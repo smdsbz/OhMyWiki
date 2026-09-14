@@ -743,6 +743,7 @@ export class WikitextParser {
     let colSpan = 1;
     let rowSpan = 1;
     let align = '';
+    let widthPct = 0;
     // 属性部分：| attrs | content
     const pi = this.topLevelIndexOf(content, '|');
     if (pi >= 0) {
@@ -765,6 +766,15 @@ export class WikitextParser {
         if (am2 !== null) {
           align = am2[1];
         }
+        const wm = attrs.match(/width\s*=\s*["']?(\d+(?:\.\d+)?)%?/i);
+        if (wm === null) {
+          const ws = attrs.match(/width\s*:\s*(\d+(?:\.\d+)?)%/i);
+          if (ws !== null) {
+            widthPct = parseFloat(ws[1]);
+          }
+        } else if (wm[0].indexOf('%') >= 0) {
+          widthPct = parseFloat(wm[1]);
+        }
       }
     }
     const node: WikiNode = {
@@ -774,6 +784,9 @@ export class WikitextParser {
       rowSpan: rowSpan > 1 ? rowSpan : undefined,
       align: align.length > 0 ? align : undefined,
     };
+    if (widthPct > 0) {
+      node.widthPct = widthPct;
+    }
     return node;
   }
 
@@ -1103,10 +1116,46 @@ export class WikitextParser {
       if (tagName === 'span' || tagName === 'div' || tagName === 'font' || tagName === 'small' ||
         tagName === 'big' || tagName === 'sup' || tagName === 'sub' || tagName === 'u' ||
         tagName === 's' || tagName === 'center' || tagName === 'abbr') {
+        // 带样式语义的容器（<font color> / style color / <small><big> 字号）：包成样式节点
+        if (!isClose) {
+          const color = this.tagColor(full);
+          const fontSize = tagName === 'small' ? 10 : (tagName === 'big' ? 18 : 0);
+          if (color !== null || fontSize > 0) {
+            const closeTag = '</' + tagName + '>';
+            const close = lower.indexOf(closeTag, i);
+            if (close >= 0) {
+              const node: WikiNode = {
+                type: NodeType.Color,
+                inline: this.parseInline(text.substring(i + full.length, close)),
+              };
+              if (color !== null) {
+                node.color = color;
+              }
+              if (fontSize > 0) {
+                node.fontSize = fontSize;
+              }
+              out.push(node);
+              return close + closeTag.length;
+            }
+          }
+        }
         return i + full.length;
       }
       // 其他标签原样输出文本
       return i + full.length;
+    }
+    return null;
+  }
+
+  /** 从标签原文提取颜色：color 属性或 style 内 color: 声明（仅接受 #rrgg[bbl] 形式） */
+  private tagColor(tag: string): string | null {
+    const cm = tag.match(/color\s*=\s*"(#[0-9a-fA-F]{3,8})"/i);
+    if (cm !== null) {
+      return cm[1];
+    }
+    const sm = tag.match(/color\s*:\s*(#[0-9a-fA-F]{3,8})/i);
+    if (sm !== null) {
+      return sm[1];
     }
     return null;
   }
