@@ -201,7 +201,7 @@ export class SmwQueryEngine implements AskHandler {
         const eq = this.topLevelIndexOf(body, '=');
         const name = (eq > 0 ? body.substring(0, eq) : body).trim();
         // 去掉尾部 #（SMW 原始值标记）
-        props.push(name.endsWith('#') ? name.substring(0, name.length - 1) : name);
+        props.push(this.canonProp(name.endsWith('#') ? name.substring(0, name.length - 1) : name));
       }
     }
     const pageProps = await this.extractProps(title, ctx);
@@ -309,9 +309,9 @@ export class SmwQueryEngine implements AskHandler {
         const body = seg.substring(1);
         const eq = this.topLevelIndexOf(body, '=');
         if (eq > 0) {
-          q.displayProps.push({ prop: body.substring(0, eq).trim(), label: body.substring(eq + 1).trim() });
+          q.displayProps.push({ prop: this.canonProp(body.substring(0, eq).trim()), label: body.substring(eq + 1).trim() });
         } else {
-          q.displayProps.push({ prop: body.trim(), label: '' });
+          q.displayProps.push({ prop: this.canonProp(body.trim()), label: '' });
         }
       } else {
         const eq = this.topLevelIndexOf(seg, '=');
@@ -319,7 +319,7 @@ export class SmwQueryEngine implements AskHandler {
           const key = seg.substring(0, eq).trim().toLowerCase();
           const val = seg.substring(eq + 1).trim();
           if (key === 'sort') {
-            q.sortProps = val.split(',').map((s) => s.trim()).filter((s) => s.length > 0);
+            q.sortProps = val.split(',').map((s) => this.canonProp(s.trim())).filter((s) => s.length > 0);
           } else if (key === 'limit') {
             const num = parseInt(val);
             q.limit = isNaN(num) ? 0 : num;
@@ -347,7 +347,7 @@ export class SmwQueryEngine implements AskHandler {
       const prop = inner.substring(0, dc).trim();
       const value = inner.substring(dc + 2).trim();
       if (prop.length > 0) {
-        q.propFilters.push({ prop: prop, value: value });
+        q.propFilters.push({ prop: this.canonProp(prop), value: value });
       }
       return;
     }
@@ -415,7 +415,7 @@ export class SmwQueryEngine implements AskHandler {
           invokeHandler: ctx.invokeHandler,
           askHandler: null,
           capture: (prop: string, value: string): void => {
-            const p = prop.trim();
+            const p = this.canonProp(prop.trim());
             if (p.length === 0) {
               return;
             }
@@ -435,6 +435,11 @@ export class SmwQueryEngine implements AskHandler {
     }
     this.propCache.set(title, props);
     return props;
+  }
+
+  /** SMW 属性名归一化：首字母大写（MediaWiki 标题语义——?salvagePop 与 SalvagePop 同属性） */
+  private canonProp(p: string): string {
+    return p.length > 0 ? p.charAt(0).toUpperCase() + p.substring(1) : p;
   }
 
   private matches(q: AskQuery, props: Map<string, string[]>): boolean {
