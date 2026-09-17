@@ -421,9 +421,11 @@ export class SmwQueryEngine implements AskHandler {
             }
             const v = value.trim();
             const arr = props.get(p);
+            // SMW 语义：页面属性是值集合（mw.smw.set 重复同值不重复存储），
+            // 同页多次捕获（打捞点多状态 popTable 的地域等）只记一次
             if (arr === undefined) {
               props.set(p, [v]);
-            } else {
+            } else if (arr.indexOf(v) < 0) {
               arr.push(v);
             }
           },

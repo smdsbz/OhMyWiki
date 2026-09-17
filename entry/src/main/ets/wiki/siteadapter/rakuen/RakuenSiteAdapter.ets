@@ -4,11 +4,14 @@ import { SiteAdapter } from '../SiteAdapter';
 import { WikiSite } from '../../../model/WikiTypes';
 import { EnemyModule } from './EnemyModule';
 import { CollectionModule } from './CollectionModule';
+import { SalvageModule } from './SalvageModule';
 
 const TAG = 'RakuenSiteAdapter';
 
 /** 前端交互地图占位 div（multi-xb2map-collection）匹配：高亮物品名捕获组 */
 const ITEM_MAP_DIV_RE = /<div[^>]*class="[^"]*xb2map-collection[^"]*"[^>]*data-highlight-collection-item="([^"]*)"[^>]*><\/div>/g;
+/** 前端交互地图占位 div（xb2map-salvage）匹配：打捞点 gmkId 捕获组 */
+const SALVAGE_MAP_DIV_RE = /<div[^>]*class="[^"]*xb2map-salvage[^"]*"[^>]*data-gmk-id="([^"]*)"[^>]*><\/div>/g;
 
 /** 搜索直达排除的命名空间前缀：MediaWiki/SMW 标准设施（本地化名）+
  *  扩展命名空间（Gadget/JSON）+ 本站 Project 元页（免责声明/捐助等）。
@@ -38,7 +41,8 @@ export class RakuenSiteAdapter implements SiteAdapter {
   /** 站点前端 JS 交互地图的占位 div → 离线版静态地图模块调用
    *  （div 在模板体内，一阶段展开后 {{FULLPAGENAME}} 已求值，此处改写后再展开一次） */
   rewriteWikitext(text: string): string {
-    return text.replace(ITEM_MAP_DIV_RE, '{{#invoke:collection|itemMap|$1}}');
+    return text.replace(ITEM_MAP_DIV_RE, '{{#invoke:collection|itemMap|$1}}')
+      .replace(SALVAGE_MAP_DIV_RE, '{{#invoke:salvage|pointMap|$1}}');
   }
 }
 
@@ -52,6 +56,8 @@ class RakuenModuleHost implements InvokeHandler {
           return await EnemyModule.invoke(func, args, ctx);
         case 'collection':
           return await CollectionModule.invoke(func, args, ctx);
+        case 'salvage':
+          return await SalvageModule.invoke(func, args, ctx);
         default:
           return PLACEHOLDER_MARK + 'Lua 模块 ' + module + ' 未实现（离线版暂不支持）' + '\u0000';
       }

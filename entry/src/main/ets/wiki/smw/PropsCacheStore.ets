@@ -2,7 +2,7 @@ import { fileIo } from '@kit.CoreFileKit';
 import { Logger } from '../../common/Logger';
 
 const TAG = 'PropsCacheStore';
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 3;
 /** 同站点写盘节流间隔（ms）：#show 密集页多次 flush 合并为末次 */
 const SAVE_THROTTLE_MS = 2000;
 
