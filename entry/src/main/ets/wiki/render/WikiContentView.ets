@@ -456,56 +456,77 @@ export struct WikiContentView {
       } else if (this.wideTableWidthVp(node) > 0) {
         // 宽表：冻结首列 + 其余列横向滚动（ArkUI Scroll 无内建 sticky 列，
         //  行高由滚动区 onAreaChange 量测回填冻结列，保证两侧行对齐）
-        Row() {
-          Column() {
-            ForEach(this.visibleRows(node, tKey), (item: TableRowPair, vIdx: number) => {
-              Column() {
-                this.renderInlineFlow(this.frozenCellOf(item.row)?.inline ?? [], '')
-              }
-              .width('100%')
-              .height(this.frozenRowH(tKey, item.ri))
-              .padding(6)
-              .backgroundColor(this.frozenCellOf(item.row)?.type === NodeType.TableHeaderCell ?
-              $r('app.color.table_header_bg') : $r('app.color.table_bg'))
-              .border({ width: 1, color: $r('app.color.table_border') })
-              .alignItems(HorizontalAlign.Start)
-            }, (item: TableRowPair, vIdx: number) => 'fcell_' + item.ri)
-          }
-          .width(WIDE_TABLE_FROZEN_W)
-          .border({ width: 1, color: $r('app.color.table_border_outer') })
-          .borderRadius({ topLeft: 4, bottomLeft: 4, topRight: 0, bottomRight: 0 })
-          .margin({ top: 8, bottom: 8 })
-
-          Scroll() {
+        Column() {
+          // 整幅横幅行（单格跨满全列，如 colspan="10"）不属于冻结/滚动任一侧，全宽渲染
+          ForEach(this.wideLeadRows(node, tKey), (item: TableRowPair) => {
             Column() {
-              ForEach(this.visibleRows(node, tKey), (item: TableRowPair, vIdx: number) => {
-                // Stretch：同行单元格拉伸到最高格的高度，保持行内等高（对齐 HTML 表格行为）
-                Flex({ direction: FlexDirection.Row, alignItems: ItemAlign.Stretch }) {
-                  ForEach(this.bodyCellsOf(item.row), (cell: WikiNode, cIdx: number) => {
-                    Column() {
-                      this.renderInlineFlow(cell.inline ?? [], '')
-                    }
-                    .layoutWeight(cell.colSpan ?? 1)
-                    .padding(6)
-                    .backgroundColor(cell.type === NodeType.TableHeaderCell ? $r('app.color.table_header_bg') : $r('app.color.table_bg'))
-                    .border({ width: 1, color: $r('app.color.table_border') })
-                    .alignItems(HorizontalAlign.Start)
-                  }, (cell: WikiNode, cIdx: number) => 'cell' + item.ri + '_' + (cell.colIndex ?? 0))
+              this.renderInlineFlow(this.frozenCellOf(item.row)?.inline ?? [], '',
+                this.frozenCellOf(item.row)?.type === NodeType.TableHeaderCell)
+            }
+            .width('100%')
+            .padding(6)
+            .backgroundColor(this.frozenCellOf(item.row)?.type === NodeType.TableHeaderCell ?
+              $r('app.color.table_header_bg') : $r('app.color.table_bg'))
+            .border({
+              width: { left: 1, right: 1, top: 1, bottom: 0 },
+              color: $r('app.color.table_border_outer')
+            })
+            .borderRadius({ topLeft: 4, topRight: 4 })
+            .margin({ top: 8 })
+          }, (item: TableRowPair) => 'lead_' + item.ri)
+
+          Row() {
+            Column() {
+              ForEach(this.wideBodyRows(node, tKey), (item: TableRowPair, vIdx: number) => {
+                Column() {
+                  this.renderInlineFlow(this.frozenCellOf(item.row)?.inline ?? [], '')
                 }
                 .width('100%')
-                .onAreaChange((oldArea: Area, newArea: Area) => {
-                  this.syncRowH(tKey, item.ri, newArea.height);
-                })
-              }, (item: TableRowPair, vIdx: number) => 'frow_' + item.ri)
+                .height(this.frozenRowH(tKey, item.ri))
+                .padding(6)
+                .backgroundColor(this.frozenCellOf(item.row)?.type === NodeType.TableHeaderCell ?
+                $r('app.color.table_header_bg') : $r('app.color.table_bg'))
+                .border({ width: 1, color: $r('app.color.table_border') })
+                .alignItems(HorizontalAlign.Start)
+              }, (item: TableRowPair, vIdx: number) => 'fcell_' + item.ri)
             }
-            .width(this.wideBodyWidthVp(node))
+            .width(WIDE_TABLE_FROZEN_W)
             .border({ width: 1, color: $r('app.color.table_border_outer') })
-            .borderRadius({ topLeft: 0, bottomLeft: 0, topRight: 4, bottomRight: 4 })
-            .margin({ top: 8, bottom: 8 })
+            .borderRadius({ topLeft: 4, bottomLeft: 4, topRight: 0, bottomRight: 0 })
+            .margin({ top: this.wideLeadRows(node, tKey).length > 0 ? 0 : 8, bottom: 8 })
+
+            Scroll() {
+              Column() {
+                ForEach(this.wideBodyRows(node, tKey), (item: TableRowPair, vIdx: number) => {
+                  // Stretch：同行单元格拉伸到最高格的高度，保持行内等高（对齐 HTML 表格行为）
+                  Flex({ direction: FlexDirection.Row, alignItems: ItemAlign.Stretch }) {
+                    ForEach(this.bodyCellsOf(item.row), (cell: WikiNode, cIdx: number) => {
+                      Column() {
+                        this.renderInlineFlow(cell.inline ?? [], '')
+                      }
+                      .layoutWeight(cell.colSpan ?? 1)
+                      .padding(6)
+                      .backgroundColor(cell.type === NodeType.TableHeaderCell ? $r('app.color.table_header_bg') : $r('app.color.table_bg'))
+                      .border({ width: 1, color: $r('app.color.table_border') })
+                      .alignItems(HorizontalAlign.Start)
+                    }, (cell: WikiNode, cIdx: number) => 'cell' + item.ri + '_' + (cell.colIndex ?? 0))
+                  }
+                  .width('100%')
+                  .onAreaChange((oldArea: Area, newArea: Area) => {
+                    this.syncRowH(tKey, item.ri, newArea.height);
+                  })
+                }, (item: TableRowPair, vIdx: number) => 'frow_' + item.ri)
+              }
+              .width(this.wideBodyWidthVp(node))
+              .border({ width: 1, color: $r('app.color.table_border_outer') })
+              .borderRadius({ topLeft: 0, bottomLeft: 0, topRight: 4, bottomRight: 4 })
+              .margin({ top: this.wideLeadRows(node, tKey).length > 0 ? 0 : 8, bottom: 8 })
+            }
+            .scrollable(ScrollDirection.Horizontal)
+            .scrollBar(BarState.Auto)
+            .layoutWeight(1)
           }
-          .scrollable(ScrollDirection.Horizontal)
-          .scrollBar(BarState.Auto)
-          .layoutWeight(1)
+          .width('100%')
         }
         .width('100%')
       } else {
@@ -643,6 +664,35 @@ export struct WikiContentView {
       }
     }
     return null;
+  }
+
+  /** 整幅横幅行：单格且跨满全部列（无法归属冻结列或滚动区，需全宽渲染） */
+  private isFullWidthRow(row: WikiNode, cols: number): boolean {
+    const cells = (row.children ?? []) as WikiNode[];
+    return cells.length === 1 && (cells[0].colIndex ?? 0) === 0 &&
+      (cells[0].colSpan ?? 1) >= cols;
+  }
+
+  /** 宽表开头连续的整幅横幅行 */
+  private wideLeadRows(node: WikiNode, tKey: string): TableRowPair[] {
+    const cols = this.tableCols(node);
+    const vis = this.visibleRows(node, tKey);
+    const out: TableRowPair[] = [];
+    for (let i = 0; i < vis.length && this.isFullWidthRow(vis[i].row, cols); i++) {
+      out.push(vis[i]);
+    }
+    return out;
+  }
+
+  /** 宽表正文行（跳过开头整幅横幅行） */
+  private wideBodyRows(node: WikiNode, tKey: string): TableRowPair[] {
+    const cols = this.tableCols(node);
+    const vis = this.visibleRows(node, tKey);
+    let i = 0;
+    while (i < vis.length && this.isFullWidthRow(vis[i].row, cols)) {
+      i++;
+    }
+    return vis.slice(i);
   }
 
   /** 滚动区单元格（除冻结首列外） */
@@ -834,8 +884,9 @@ export struct WikiContentView {
   // ---------- 行内渲染 ----------
 
   @Builder
-  renderInlineFlow(inline: WikiNode[], prefix: string) {
-    Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Baseline }) {
+  renderInlineFlow(inline: WikiNode[], prefix: string, center: boolean = false) {
+    Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Baseline,
+      justifyContent: center ? FlexAlign.Center : FlexAlign.Start }) {
       this.renderSegments(this.buildSegments(inline, prefix))
     }
     .width('100%')
