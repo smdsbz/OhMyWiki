@@ -1,5 +1,6 @@
 import { InvokeHandler } from '../template/TemplateEngine';
 import { WikiSite } from '../../model/WikiTypes';
+import { HtmlPageConfig } from './HtmlPageConfig';
 
 /**
  * 站点适配器：提供某站点自身所需的能力（Lua 模块实现等）。
@@ -17,6 +18,10 @@ export interface SiteAdapter {
   /** 搜索直达排除的命名空间前缀（可选，默认不过滤）：站点自行声明哪些命名空间
    *  是基础设施（模板/模块/文件/数据页等），引擎不内置任何站点知识 */
   searchExcludedNs?: string[];
+  /** 页面格式（可选，默认 wikitext）：html = 页面为原始 HTML，走 HtmlParser 直渲染 */
+  pageFormat?: 'wikitext' | 'html';
+  /** HTML 直渲染配置（pageFormat='html' 时必填）：站点知识全部集中于此 */
+  htmlConfig?: HtmlPageConfig;
 }
 
 /**

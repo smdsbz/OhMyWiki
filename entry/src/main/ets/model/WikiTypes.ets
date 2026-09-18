@@ -52,6 +52,8 @@ export enum NodeType {
   LineBreak = 'br',
   Placeholder = 'placeholder',
   Container = 'container',
+  /** 进度/量表（HTML 直渲染：強さ双色条、斩位多色段） */
+  Gauge = 'gauge',
   /** 敌人地图位置（底图 + 标记点） */
   /** 通用地图节点（模块输出 @@WIKIMAP 协议行） */
   Map = 'map',
@@ -63,6 +65,13 @@ export interface MapMarker {
   left: number;
   /** 距顶部百分比 0-100 */
   top: number;
+}
+
+/** 量表色段（顺序并排渲染） */
+export interface GaugeSeg {
+  /** 占比 0-100 */
+  pct: number;
+  color: string;
 }
 
 /** wikitext 解析后的节点 */
@@ -110,6 +119,14 @@ export interface WikiNode {
   colIndex?: number;
   /** 表头声明的列宽百分比（如 width="50%"），按比例分配列宽 */
   widthPct?: number;
+  /** 背景色（HTML 直渲染：单元格/行内 #rrggbb，如乱入标记赤底） */
+  bgColor?: string;
+  /** 链接 fragment（HTML 直渲染锚点，如 #id182540；MVP 跳转时忽略） */
+  anchor?: string;
+  /** 量表色段（Gauge 节点） */
+  gaugeSegs?: GaugeSeg[];
+  /** 量表条高（vp，缺省 4） */
+  gaugeHeight?: number;
   /** 地图区域名（对应 Mapinfo Name，如 ma02a_f01） */
   /** 地图底图文件名（由模块输出时拼好，引擎不感知站点命名规则） */
   mapImage?: string;

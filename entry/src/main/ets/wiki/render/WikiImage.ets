@@ -19,6 +19,8 @@ export struct WikiImage {
   @State failed: boolean = false;
   /** 原图宽高比（width/height），用于铺满宽时按比例定高 */
   @State ratio: number = 0;
+  /** 原图宽度（px≈vp）：无宽度注释的行内图自适应（≤48 小图标按原宽，大图铺满行） */
+  @State naturalW: number = 0;
 
   aboutToAppear(): void {
     this.load();
@@ -30,6 +32,7 @@ export struct WikiImage {
       this.pm = result;
       try {
         const info = await result.getImageInfo();
+        this.naturalW = info.size.width;
         if (info.size.height > 0) {
           this.ratio = info.size.width / info.size.height;
         }
@@ -104,10 +107,27 @@ export struct WikiImage {
             .margin({ top: 6, bottom: 6 })
         }
       } else {
-        Image(this.pm as image.PixelMap)
-          .width(this.widthVp() > 0 ? this.widthVp() : 120)
-          .constraintSize({ maxHeight: 360 })
-          .objectFit(ImageFit.Contain)
+        // 行内图：有宽度注释按注释；无注释按自然宽自适应（小图标原宽，大图整行）
+        if (this.widthVp() > 0) {
+          Image(this.pm as image.PixelMap)
+            .width(this.widthVp())
+            .constraintSize({ maxHeight: 360 })
+            .objectFit(ImageFit.Contain)
+        } else if (this.naturalW > 0 && this.naturalW <= 48) {
+          Image(this.pm as image.PixelMap)
+            .width(this.naturalW)
+            .objectFit(ImageFit.Contain)
+        } else if (this.naturalW > 48) {
+          Image(this.pm as image.PixelMap)
+            .width('100%')
+            .aspectRatio(this.ratio > 0 ? this.ratio : 1)
+            .objectFit(ImageFit.Fill)
+            .margin({ top: 6, bottom: 6 })
+        } else {
+          Image(this.pm as image.PixelMap)
+            .width(24)
+            .objectFit(ImageFit.Contain)
+        }
       }
     } else {
       Column() {
@@ -115,8 +135,8 @@ export struct WikiImage {
           .fontSize(12)
           .fontColor($r('app.color.img_missing_text'))
       }
-      .width(this.widthVp() > 0 ? this.widthVp() : 160)
-      .height(80)
+      .width(this.widthVp() > 0 ? this.widthVp() : (this.block ? 160 : 24))
+      .height(this.block ? 80 : 24)
       .justifyContent(FlexAlign.Center)
       .backgroundColor($r('app.color.surface_deep'))
       .borderRadius(6)

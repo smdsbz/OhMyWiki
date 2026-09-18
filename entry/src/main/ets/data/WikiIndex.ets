@@ -27,6 +27,8 @@ export class WikiIndex {
   readonly rootRel: string;
 
   private titleToPath: Map<string, string> = new Map();
+  /** manifest path（如 data/1829.html）→ 规范标题：HTML 直渲染站点的 href→title 解析 */
+  private pathToTitle: Map<string, string> = new Map();
   private templateCache: Map<string, string | null> = new Map();
   private loaded: boolean = false;
 
@@ -63,6 +65,7 @@ export class WikiIndex {
       for (const e of arr) {
         if (e.path && e.title) {
           this.titleToPath.set(this.normalizeTitle(e.title), 'pages/' + e.path);
+          this.pathToTitle.set(e.path, this.normalizeTitle(e.title));
         }
       }
       return true;
@@ -85,10 +88,16 @@ export class WikiIndex {
       Logger.warn(TAG, 'walkPages: test read failed: ' + JSON.stringify(e));
     }
     for (const f of files) {
-      if (!f.endsWith('.wiki')) {
+      let extLen = -1;
+      if (f.endsWith('.wiki')) {
+        extLen = 5;
+      } else if (f.endsWith('.html')) {
+        extLen = 5;
+      }
+      if (extLen < 0) {
         continue;
       }
-      const noExt = f.substring(0, f.length - 5);
+      const noExt = f.substring(0, f.length - extLen);
       const idx = noExt.lastIndexOf('/');
       const dir = idx >= 0 ? noExt.substring(0, idx) : '';
       const base = idx >= 0 ? noExt.substring(idx + 1) : noExt;
@@ -103,6 +112,29 @@ export class WikiIndex {
 
   /** 懒加载读取图片字节：按需试探 images/ 下候选名，全失败返回 null（占位）。结果缓存不重试 */
   async readImageBinary(fileName: string): Promise<Uint8Array | null> {
+    // 含子目录路径（HTML 直渲染站点保留原始目录结构）：先按原路径直读，失败回退扁平候选
+    if (fileName.indexOf('/') >= 0) {
+      const cachedPath = this.imageResolveCache.get(fileName);
+      if (cachedPath === null) {
+        return null;
+      }
+      if (cachedPath !== undefined) {
+        try {
+          return await this.source.readBinary(
+            PathUtil.join(PathUtil.join(this.rootRel, 'images'), cachedPath));
+        } catch (e) {
+          return null;
+        }
+      }
+      try {
+        const bytes = await this.source.readBinary(
+          PathUtil.join(PathUtil.join(this.rootRel, 'images'), fileName));
+        this.imageResolveCache.set(fileName, fileName);
+        return bytes;
+      } catch (e) {
+        // 回退到扁平候选（取末段名）
+      }
+    }
     const base = fileName.split('/').pop() ?? fileName;
     if (base.length === 0) {
       return null;
@@ -283,6 +315,12 @@ export class WikiIndex {
   /** 读取 JSON 命名空间数据页 */
   async readJsonData(sub: string): Promise<string | null> {
     return this.readPage('JSON:' + sub);
+  }
+
+  /** 站内路径（manifest path，如 data/1829.html）→ 规范标题；null = 不存在。
+   *  HTML 直渲染站点的 href 解析入口 */
+  resolvePathLink(path: string): string | null {
+    return this.pathToTitle.get(path) ?? null;
   }
 
   /**

@@ -1,10 +1,10 @@
-import { NodeType, WikiNode } from '../../model/WikiTypes';
+import { NodeType, WikiNode, GaugeSeg } from '../../model/WikiTypes';
 import { WikiImage } from './WikiImage';
 import { WikiMapView } from './WikiMapView';
 
 /** 行内渲染单元 */
 interface InlineRun {
-  kind: string; // 'text' | 'link' | 'image' | 'placeholder' | 'break'
+  kind: string; // 'text' | 'link' | 'image' | 'placeholder' | 'break' | 'gauge'
   inline?: WikiNode[];
   target?: string;
   fileName?: string;
@@ -12,9 +12,12 @@ interface InlineRun {
   height?: number;
   align?: string;
   reason?: string;
+  gaugeSegs?: GaugeSeg[];
+  gaugeHeight?: number;
   style: number; // 1=bold 2=italic
   color?: string; // 行内颜色（继承自 Color 节点）
   fontSize?: number; // 行内字号（继承自 <small>/<big>）
+  bgColor?: string; // 行内背景色（继承自 Color 节点，如乱入黄底）
 }
 
 /** 表格行 + 原始行号（过滤后保持稳定 key） */
@@ -32,17 +35,20 @@ interface RichSpan {
   target: string;
   color: string; // 行内颜色（'' = 默认）
   fontSize?: number; // 行内字号（0/未设 = 默认）
+  bgColor?: string; // 行内背景色（'' /未设 = 透明）
 }
 
 /** 行内渲染段：连续 text/link 合并为一个 rich 段（单个 Text 内多 Span，支持段内自然换行） */
 interface InlineSeg {
-  kind: string; // 'rich' | 'image' | 'placeholder' | 'break'
+  kind: string; // 'rich' | 'image' | 'placeholder' | 'break' | 'gauge'
   spans?: RichSpan[];
   fileName?: string;
   width?: number;
   height?: number;
   align?: string;
   reason?: string;
+  gaugeSegs?: GaugeSeg[];
+  gaugeHeight?: number;
 }
 
 /** 行数达到该阈值的表格自动显示搜索框（任务/物品等 #ask 查询大表） */
@@ -190,6 +196,15 @@ export struct WikiContentView {
     return 15;
   }
 
+  /** 单元格背景：源数据 bgColor（如乱入标记赤底）优先，否则表头/表体主题色 */
+  private cellBg(cell: WikiNode): ResourceColor {
+    if (cell.bgColor !== undefined && cell.bgColor.length > 0) {
+      return cell.bgColor;
+    }
+    return cell.type === NodeType.TableHeaderCell
+      ? $r('app.color.table_header_bg') : $r('app.color.table_bg');
+  }
+
   private isSingleImage(inline: WikiNode[]): boolean {
     // 容忍前导空白文本（如 `rowspan="4" | {{icon|...}}` 剥离属性后残留的空格）
     let idx = 0;
@@ -202,14 +217,14 @@ export struct WikiContentView {
 
   /** 构建行内渲染单元（按链接/图片/占位/换行切分） */
   private buildRuns(inline: WikiNode[], style: number, color: string,
-    fontSize: number): InlineRun[] {
+    fontSize: number, bg: string = ''): InlineRun[] {
     const runs: InlineRun[] = [];
     let current: WikiNode[] = [];
 
     const flush = (): void => {
       if (current.length > 0) {
         runs.push({ kind: 'text', inline: current, style: style, color: color,
-          fontSize: fontSize > 0 ? fontSize : undefined });
+          fontSize: fontSize > 0 ? fontSize : undefined, bgColor: bg });
         current = [];
       }
     };
@@ -231,7 +246,8 @@ export struct WikiContentView {
           }
           const childColor = t === NodeType.Color && tok.color !== undefined ? tok.color : color;
           const childSize = t === NodeType.Color && tok.fontSize !== undefined ? tok.fontSize : fontSize;
-          const childRuns = this.buildRuns(tok.inline ?? [], childStyle, childColor, childSize);
+          const childBg = t === NodeType.Color && tok.bgColor !== undefined ? tok.bgColor : bg;
+          const childRuns = this.buildRuns(tok.inline ?? [], childStyle, childColor, childSize, childBg);
           for (const r of childRuns) {
             runs.push(r);
           }
@@ -241,7 +257,7 @@ export struct WikiContentView {
       } else if (t === NodeType.Link) {
         flush();
         runs.push({ kind: 'link', inline: tok.inline ?? [], target: tok.target, style: style,
-          color: color, fontSize: fontSize > 0 ? fontSize : undefined });
+          color: color, fontSize: fontSize > 0 ? fontSize : undefined, bgColor: bg });
       } else if (t === NodeType.FileImage) {
         flush();
         runs.push({
@@ -255,6 +271,9 @@ export struct WikiContentView {
       } else if (t === NodeType.Placeholder) {
         flush();
         runs.push({ kind: 'placeholder', reason: tok.reason, style: style });
+      } else if (t === NodeType.Gauge) {
+        flush();
+        runs.push({ kind: 'gauge', gaugeSegs: tok.gaugeSegs, gaugeHeight: tok.gaugeHeight, style: style });
       } else if (t === NodeType.LineBreak) {
         flush();
         runs.push({ kind: 'break', style: style });
@@ -270,7 +289,7 @@ export struct WikiContentView {
     for (const tok of inline) {
       const t = tok.type;
       if (t === NodeType.Link || t === NodeType.FileImage || t === NodeType.Placeholder ||
-        t === NodeType.LineBreak) {
+        t === NodeType.LineBreak || t === NodeType.Gauge) {
         return true;
       }
       if ((t === NodeType.Bold || t === NodeType.Italic || t === NodeType.BoldItalic ||
@@ -484,8 +503,9 @@ export struct WikiContentView {
                 .width('100%')
                 .height(this.frozenRowH(tKey, item.ri))
                 .padding(6)
-                .backgroundColor(this.frozenCellOf(item.row)?.type === NodeType.TableHeaderCell ?
-                $r('app.color.table_header_bg') : $r('app.color.table_bg'))
+                .backgroundColor(this.frozenCellOf(item.row) !== null
+                  ? this.cellBg(this.frozenCellOf(item.row) as WikiNode)
+                  : $r('app.color.table_bg'))
                 .border({ width: 1, color: $r('app.color.table_border') })
                 .alignItems(HorizontalAlign.Start)
               }, (item: TableRowPair, vIdx: number) => 'fcell_' + item.ri)
@@ -506,7 +526,7 @@ export struct WikiContentView {
                       }
                       .layoutWeight(cell.colSpan ?? 1)
                       .padding(6)
-                      .backgroundColor(cell.type === NodeType.TableHeaderCell ? $r('app.color.table_header_bg') : $r('app.color.table_bg'))
+                      .backgroundColor(this.cellBg(cell))
                       .border({ width: 1, color: $r('app.color.table_border') })
                       .alignItems(HorizontalAlign.Start)
                     }, (cell: WikiNode, cIdx: number) => 'cell' + item.ri + '_' + (cell.colIndex ?? 0))
@@ -540,7 +560,7 @@ export struct WikiContentView {
                 }
                 .layoutWeight(this.colWeight(node, cell))
                 .padding(6)
-                .backgroundColor(cell.type === NodeType.TableHeaderCell ? $r('app.color.table_header_bg') : $r('app.color.table_bg'))
+                .backgroundColor(this.cellBg(cell))
                 .border({ width: 1, color: $r('app.color.table_border') })
                 .alignItems(HorizontalAlign.Start)
               }, (cell: WikiNode, cIdx: number) => 'cell' + item.ri + '_' + cIdx)
@@ -739,12 +759,113 @@ export struct WikiContentView {
   }
 
   private rowsTemplate(node: WikiNode): string {
-    const n = ((node.children ?? []) as WikiNode[]).length;
+    // 按各行内容估算的比例分配行高（fr 权重）：总高由 gridHeightVp 控制
+    const hs = this.gridRowHeightsVp(node);
     let t = '';
-    for (let k = 0; k < n; k++) {
-      t += (k > 0 ? ' ' : '') + '1fr';
+    for (let k = 0; k < hs.length; k++) {
+      t += (k > 0 ? ' ' : '') + Math.max(1, Math.round(hs[k])) + 'fr';
     }
     return t;
+  }
+
+  /** 行内文本行数统计（LineBreak 分行；长段按列宽估折行；CJK 记 1、ASCII/空格记 0.5） */
+  private countLines(inline: WikiNode[], charsPerLine: number, acc: number[]): void {
+    for (const tok of inline) {
+      const t = tok.type;
+      if (t === NodeType.Text) {
+        let w = 0;
+        const s = tok.text ?? '';
+        for (let i = 0; i < s.length; i++) {
+          const c = s.charCodeAt(i);
+          w += c > 0x2E7F ? 1 : 0.5;
+        }
+        acc[1] += w;
+        while (acc[1] > charsPerLine) {
+          acc[0]++;
+          acc[1] -= charsPerLine;
+        }
+      } else if (t === NodeType.LineBreak) {
+        acc[0]++;
+        acc[1] = 0;
+      } else if (t === NodeType.FileImage) {
+        acc[1] += 2;
+        while (acc[1] > charsPerLine) {
+          acc[0]++;
+          acc[1] -= charsPerLine;
+        }
+      } else if (tok.inline !== undefined) {
+        this.countLines(tok.inline, charsPerLine, acc);
+      }
+    }
+  }
+
+  /** 估算单元格内容高度（vp）：纯文本格按行数估；仅含单图的格用图标模型
+   *（图标+标签格无行数可估，且图标随跨行数放大——文字格不得套用图标下限，
+   *  否则跨行文字列会把每行撑到 ~55vp，单行内容行高虚胖 4 倍） */
+  private estCellHeightVp(cell: WikiNode, colVp: number): number {
+    const rs = cell.rowSpan !== undefined ? cell.rowSpan : 1;
+    if (this.isSingleImage(cell.inline ?? [])) {
+      return (Math.ceil(this.gridIconVp(rs) / rs) + 36) * rs;
+    }
+    const charsPerLine = Math.max(4, Math.floor(colVp / 13));
+    const acc: number[] = [1, 0];
+    this.countLines(cell.inline ?? [], charsPerLine, acc);
+    return Math.min(60, acc[0]) * 22 + 10;
+  }
+
+  /** 逐行高度估算（vp）：本行各格内容高按 rowspan 分摊取最大，下限 26。
+   *  列宽优先取表头 widthPct 实际比例（无声明回退等分）；
+   *  表宽必须与实际渲染宽一致——宽表（>6 列）走横向滚动路径，实际宽为
+   *  cols×TABLE_COL_MIN_VP，若仍按屏宽 380vp 估，列宽被低估 3 倍、折行数虚高、行高虚胖 */
+  private gridRowHeightsVp(node: WikiNode): number[] {
+    const rows = (node.children ?? []) as WikiNode[];
+    const cols = this.tableCols(node);
+    const tableVp = Math.max(380, this.wideTableWidthVp(node));
+    const equalVp = tableVp / Math.max(1, cols);
+    // 表头 widthPct → 每列宽度
+    const colPct: Map<number, number> = new Map();
+    const firstRow = rows.length > 0 ? (rows[0].children ?? []) as WikiNode[] : [];
+    for (const h of firstRow) {
+      if (h.widthPct !== undefined) {
+        const cs = h.colSpan ?? 1;
+        const per = h.widthPct / 100 * tableVp / cs;
+        for (let k = 0; k < cs; k++) {
+          colPct.set((h.colIndex ?? 0) + k, per);
+        }
+      }
+    }
+    const cellColVp = (cell: WikiNode): number => {
+      let w = 0;
+      const cs = cell.colSpan ?? 1;
+      for (let k = 0; k < cs; k++) {
+        const p = colPct.get((cell.colIndex ?? 0) + k);
+        w += p !== undefined ? p : equalVp;
+      }
+      return w;
+    };
+    const out: number[] = [];
+    for (const row of rows) {
+      let rh = 26;
+      for (const cell of (row.children ?? []) as WikiNode[]) {
+        const rs = cell.rowSpan !== undefined ? cell.rowSpan : 1;
+        const share = Math.ceil(this.estCellHeightVp(cell, cellColVp(cell)) / rs);
+        if (share > rh) {
+          rh = share;
+        }
+      }
+      out.push(rh);
+    }
+    return out;
+  }
+
+  /** 估算表格高度（vp）：逐行高度之和（行高按 rowsTemplate 的 fr 权重比例分配） */
+  private gridHeightVp(node: WikiNode): number {
+    const hs = this.gridRowHeightsVp(node);
+    let total = 0;
+    for (const h of hs) {
+      total += h;
+    }
+    return total;
   }
 
   /** 网格表格内图标尺寸（vp）：按单元格纵向跨行数缩放——跨行越多可用空间越大，图标越大。
@@ -757,27 +878,6 @@ export struct WikiContentView {
       return 44;
     }
     return 32;
-  }
-
-  /** 估算表格高度（vp）：按行内容，rowspan 单元格高度分摊到每行；预留图标标签(caption)高度 */
-  private gridHeightVp(node: WikiNode): number {
-    const rows = (node.children ?? []) as WikiNode[];
-    let total = 0;
-    for (let r = 0; r < rows.length; r++) {
-      let rh = 68;
-      const cells = (rows[r] as WikiNode).children ?? [];
-      for (let c = 0; c < cells.length; c++) {
-        const cell = cells[c] as WikiNode;
-        const rs = cell.rowSpan !== undefined ? cell.rowSpan : 1;
-        // 图标按跨行数缩放，高度分摊到每行
-        const perRow = Math.ceil(this.gridIconVp(rs) / rs) + 36;
-        if (perRow > rh) {
-          rh = perRow;
-        }
-      }
-      total += rh;
-    }
-    return total;
   }
 
   /** Grid 单元格内容：单个图标 → 图标+元素名标签；否则行内渲染 */
@@ -806,26 +906,31 @@ export struct WikiContentView {
   }
 
   @Builder
+  gridItems(node: WikiNode) {
+    ForEach(this.flattenCells(node), (item: TableCellItem, idx: number) => {
+      GridItem() {
+        Column() {
+          this.gridCellContent(item.cell)
+        }
+        .width('100%')
+        .height('100%')
+        .justifyContent(FlexAlign.Center)
+        .alignItems(HorizontalAlign.Center)
+        .padding(4)
+      }
+      .backgroundColor(this.cellBg(item.cell))
+      .border({ width: 1, color: $r('app.color.table_border_outer') })
+      .rowStart(item.row)
+      .rowEnd(item.row + (item.cell.rowSpan ?? 1) - 1)
+      .columnStart(item.cell.colIndex ?? 0)
+      .columnEnd((item.cell.colIndex ?? 0) + (item.cell.colSpan ?? 1) - 1)
+    }, (item: TableCellItem, idx: number) => 'grid' + idx)
+  }
+
+  @Builder
   renderTableGrid(node: WikiNode) {
     Grid() {
-      ForEach(this.flattenCells(node), (item: TableCellItem, idx: number) => {
-        GridItem() {
-          Column() {
-            this.gridCellContent(item.cell)
-          }
-          .width('100%')
-          .height('100%')
-          .justifyContent(FlexAlign.Center)
-          .alignItems(HorizontalAlign.Center)
-          .padding(4)
-        }
-        .backgroundColor(item.cell.type === NodeType.TableHeaderCell ? $r('app.color.table_header_bg') : $r('app.color.table_bg'))
-        .border({ width: 1, color: $r('app.color.table_border_outer') })
-        .rowStart(item.row)
-        .rowEnd(item.row + (item.cell.rowSpan ?? 1) - 1)
-        .columnStart(item.cell.colIndex ?? 0)
-        .columnEnd((item.cell.colIndex ?? 0) + (item.cell.colSpan ?? 1) - 1)
-      }, (item: TableCellItem, idx: number) => 'grid' + idx)
+      this.gridItems(node)
     }
     .columnsTemplate(this.colsTemplate(node))
     .rowsTemplate(this.rowsTemplate(node))
@@ -909,7 +1014,7 @@ export struct WikiContentView {
       if (r.kind === 'text' || r.kind === 'link') {
         const isLink = r.kind === 'link';
         const spans = this.flattenRich(r.inline ?? [], r.style, isLink,
-          isLink ? (r.target ?? '') : '', r.color ?? '', r.fontSize ?? 0);
+          isLink ? (r.target ?? '') : '', r.color ?? '', r.fontSize ?? 0, r.bgColor ?? '');
         for (const s of spans) {
           buf.push(s);
         }
@@ -917,9 +1022,17 @@ export struct WikiContentView {
         // <br>：并入当前 rich 段为换行符（同一 Text 内换行，行高一致）
         buf.push({ text: '\n', bold: false, italic: false, link: false, target: '', color: '' });
       } else {
+        // 连续 gauge 之间的 <br> 冗余（gauge 全宽自然换行）
+        if (r.kind === 'gauge' && buf.length > 0 && segs.length > 0 &&
+          segs[segs.length - 1].kind === 'gauge' &&
+          buf.every((s: RichSpan): boolean => s.text === '\n')) {
+          buf = [];
+        }
         flushRich();
         if (r.kind === 'image') {
           segs.push({ kind: 'image', fileName: r.fileName, width: r.width, height: r.height, align: r.align });
+        } else if (r.kind === 'gauge') {
+          segs.push({ kind: 'gauge', gaugeSegs: r.gaugeSegs, gaugeHeight: r.gaugeHeight });
         } else if (r.kind === 'placeholder') {
           // 连续的查询占位（同一处登记的多个 #ask/#invoke）合并为一个加载提示，避免成串冗余
           const isAsk = WikiContentView.isPendingReason(r.reason);
@@ -957,11 +1070,12 @@ export struct WikiContentView {
       const last = merged.length > 0 ? merged[merged.length - 1] : null;
       if (last !== null && last.bold === s.bold && last.italic === s.italic &&
         last.link === s.link && last.target === s.target && last.color === s.color &&
-        (last.fontSize ?? 0) === (s.fontSize ?? 0)) {
+        (last.fontSize ?? 0) === (s.fontSize ?? 0) &&
+        (last.bgColor ?? '') === (s.bgColor ?? '')) {
         last.text += s.text;
       } else {
         merged.push({ text: s.text, bold: s.bold, italic: s.italic, link: s.link,
-          target: s.target, color: s.color, fontSize: s.fontSize });
+          target: s.target, color: s.color, fontSize: s.fontSize, bgColor: s.bgColor });
       }
     }
     return merged;
@@ -969,16 +1083,17 @@ export struct WikiContentView {
 
   /** 展平行内节点为富文本 Span（保留链接标记与样式） */
   private flattenRich(inline: WikiNode[], style: number, link: boolean, target: string,
-    color: string, fontSize: number): RichSpan[] {
+    color: string, fontSize: number, bg: string = ''): RichSpan[] {
     const out: RichSpan[] = [];
     const bold = (style & 1) !== 0;
     const italic = (style & 2) !== 0;
     const size = fontSize > 0 ? fontSize : undefined;
+    const bgSet = bg.length > 0 ? bg : undefined;
     for (const tok of inline) {
       const t = tok.type;
       if (t === NodeType.Text) {
         out.push({ text: tok.text ?? '', bold: bold, italic: italic, link: link, target: target,
-          color: color, fontSize: size });
+          color: color, fontSize: size, bgColor: bgSet });
       } else if (t === NodeType.Bold || t === NodeType.Italic || t === NodeType.BoldItalic ||
         t === NodeType.Color) {
         let cs = style;
@@ -990,18 +1105,19 @@ export struct WikiContentView {
         }
         const cc = t === NodeType.Color && tok.color !== undefined ? tok.color : color;
         const csize = t === NodeType.Color && tok.fontSize !== undefined ? tok.fontSize : fontSize;
-        const sub = this.flattenRich(tok.inline ?? [], cs, link, target, cc, csize);
+        const cbg = t === NodeType.Color && tok.bgColor !== undefined ? tok.bgColor : bg;
+        const sub = this.flattenRich(tok.inline ?? [], cs, link, target, cc, csize, cbg);
         for (const s of sub) {
           out.push(s);
         }
       } else if (t === NodeType.Link) {
-        const sub = this.flattenRich(tok.inline ?? [], style, true, tok.target ?? '', color, fontSize);
+        const sub = this.flattenRich(tok.inline ?? [], style, true, tok.target ?? '', color, fontSize, bg);
         for (const s of sub) {
           out.push(s);
         }
       } else {
         out.push({ text: tok.text ?? '', bold: bold, italic: italic, link: link, target: target,
-          color: color, fontSize: size });
+          color: color, fontSize: size, bgColor: bgSet });
       }
     }
     return out;
@@ -1019,6 +1135,9 @@ export struct WikiContentView {
               .fontColor(sp.color.length > 0 ? sp.color :
                 (sp.link ? $r('app.color.link') : $r('app.color.text_body')))
               .fontSize((sp.fontSize ?? 0) > 0 ? sp.fontSize : 15)
+              .textBackgroundStyle(sp.bgColor !== undefined && sp.bgColor.length > 0
+                ? { color: sp.bgColor, radius: 2 }
+                : { color: Color.Transparent, radius: 0 })
               .decoration(sp.link
                 ? { type: TextDecorationType.Underline, color: $r('app.color.link') }
                 : { type: TextDecorationType.None })
@@ -1032,8 +1151,9 @@ export struct WikiContentView {
         .fontSize(15)
         .lineHeight(this.segLineHeight(seg.spans ?? []))
       } else if (seg.kind === 'image') {
-        if ((seg.width ?? 0) > 0 && (seg.width as number) <= 64) {
-          // 小尺寸注释（≤64px）的行内图标：随文字流内联，不独占一行
+        if ((seg.width ?? 0) === 0 || ((seg.width as number) > 0 && (seg.width as number) <= 64)) {
+          // 小尺寸注释（≤64px）的行内图标随文字流内联；无注释图由 WikiImage 按自然宽自适应
+          //（HTML 直渲染站点的小图标常无 width 属性：≤48px 原宽内联，大图自动整行）
           WikiImage({ fileName: seg.fileName ?? '', fileWidth: seg.width ?? 0,
             fileHeight: seg.height ?? 0, block: false })
         } else {
@@ -1061,6 +1181,19 @@ export struct WikiContentView {
             .borderRadius(6)
             .margin({ top: 2, bottom: 2 })
         }
+      } else if (seg.kind === 'gauge') {
+        // 量表色段条（強さ双色条/斩位多色段）：全宽轨道，段宽=百分比
+        Row({ space: 0 }) {
+          ForEach(seg.gaugeSegs ?? [], (g: GaugeSeg, gi: number) => {
+            Row()
+              .width(Math.min(100, Math.max(0, g.pct)) + '%')
+              .height(seg.gaugeHeight ?? 4)
+              .backgroundColor(g.color)
+              .borderRadius(1)
+          }, (g: GaugeSeg, gi: number) => 'g' + gi)
+        }
+        .width('100%')
+        .margin({ top: 2, bottom: 2 })
       } else if (seg.kind === 'break') {
         Column() {
         }

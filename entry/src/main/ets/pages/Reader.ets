@@ -7,6 +7,7 @@ import { WikiNode } from '../model/WikiTypes';
 import { TemplateEngine, TemplateContext, PendingAsk, PendingInvoke, PLACEHOLDER_MARK } from '../wiki/template/TemplateEngine';
 import { SmwQueryEngine } from '../wiki/smw/SmwQueryEngine';
 import { WikitextParser } from '../wiki/parser/WikitextParser';
+import { HtmlParser } from '../wiki/parser/HtmlParser';
 import { WikiContentView } from '../wiki/render/WikiContentView';
 
 const TAG = 'Reader';
@@ -30,6 +31,8 @@ export struct Reader {
   @State pageSeq: number = 0;
   /** 渐进渲染阶段 2 协程令牌：递增使旧协程失效 */
   private askRunId: number = 0;
+  /** HTML 直渲染分批追加令牌：递增使旧批次失效（防跳页后旧节点污染新页面） */
+  private htmlBatchSeq: number = 0;
   @State progressDone: number = 0;
   @State progressTotal: number = 0;
   /** 阶段 2（后台 #ask 回填）进行中：顶栏下方显示细进度条 */
@@ -84,6 +87,42 @@ export struct Reader {
         this.nodes = [];
         this.errorMsg = '页面不存在：' + title;
         this.loading = false;
+        return;
+      }
+      // HTML 直渲染路径：适配器声明 pageFormat='html' 且内容确为 HTML（双保险：
+      // 设备上可能残留同名旧 wikitext 转储），跳过 wikitext 专属链路（模板/重写/惰性查询）
+      const htmlAdapter = AppStore.getActiveAdapter();
+      if (htmlAdapter !== null && htmlAdapter.pageFormat === 'html' &&
+        htmlAdapter.htmlConfig !== undefined &&
+        /^\s*(<!doctype|<html)/i.test(raw)) {
+        const htmlParser = new HtmlParser(index, title, htmlAdapter.htmlConfig);
+        const htmlNodes = htmlParser.parse(raw);
+        this.pageTitle = title;
+        this.loading = false;
+        this.pageSeq++;
+        // 大页面分批渐进渲染：同步全量构建会阻塞主线程触发 THREAD_BLOCK
+        //（防具稀有度页 155 块实测 >10s）。renderKey 不变 → ForEach key 稳定，
+        // 追加只构建新块；代际令牌防止跳页后旧批次污染新页面
+        const CHUNK = 6;
+        this.htmlBatchSeq++;
+        const batch = this.htmlBatchSeq;
+        this.nodes = htmlNodes.slice(0, CHUNK);
+        let i = CHUNK;
+        const step = (): void => {
+          if (batch !== this.htmlBatchSeq) {
+            return;
+          }
+          this.nodes = this.nodes.concat(htmlNodes.slice(i, i + CHUNK));
+          i += CHUNK;
+          if (i < htmlNodes.length) {
+            setTimeout(step, 0);
+          }
+        };
+        if (i < htmlNodes.length) {
+          setTimeout(step, 0);
+        }
+        Logger.info(TAG, 'loadPage(html) [' + title + '] nodes=' + htmlNodes.length
+          + ' blocks=' + htmlNodes.length);
         return;
       }
       // 重定向

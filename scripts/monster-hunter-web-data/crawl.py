@@ -1,5 +1,15 @@
 #!/usr/bin/env python3
-"""Crawl angrychocobo.github.io/monster-hunter-web-data (MHXX 攻略大全 static site)
+"""[DEPRECATED 2026-09-18] HTML→wikitext 有损转换管线已被 HTML 直渲染取代：
+
+  数据源：../mhxx-repo（github.com/AngryChocobo/monster-hunter-web-data 克隆）
+  打包器：pack.py（清洗 + 打包 pages/*.html 原文，应用内 HtmlParser 直接渲染）
+
+本文件的 HTML 抓取（fetch/crawl）、Converter 转换逻辑（try_split_table/split_page_text/
+斩位点条/扁平图片名等渲染决策烘焙）已不再使用；apply_jquery/page_meta/normalize_link/
+DomBuilder 仍被 pack.py import 复用。保留全文件供回溯。
+
+---
+Crawl angrychocobo.github.io/monster-hunter-web-data (MHXX 攻略大全 static site)
 into a local wiki site dump for the OhMyWiki reader.
 
 Output layout (this folder, same conventions as rakuen-database):
