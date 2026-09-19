@@ -19,6 +19,31 @@ interface ParsedTable {
 interface ParsedBlock {
   node: WikiNode | null;
   nextIndex: number;
+  /** 与 node 同级的后续块（如闭合标签之后同一行的余量解析结果） */
+  siblings?: WikiNode[];
+}
+
+/** 混合文本切分出的顶层块级 HTML 片段 */
+interface HtmlChunk {
+  /** 'div' | 'ol' | 'ul' | 'text' */
+  kind: string;
+  text?: string;
+  /** 块级片段的完整开标签原文（div 用，提取 class/id） */
+  openTag?: string;
+  /** 块级片段的内部内容 */
+  inner?: string;
+}
+
+/** splitTopBlocks 结果：前导文本（进 li inline）+ 交替片段序列 */
+interface TopSplit {
+  lead: string;
+  pieces: HtmlChunk[];
+}
+
+/** lineCloseLi 结果：外层 li 在行内的闭合位置与闭合后余量 */
+interface LiScan {
+  closeIdx: number;
+  rest: string;
 }
 
 /**
@@ -28,6 +53,8 @@ interface ParsedBlock {
 export class WikitextParser {
   private index: WikiIndex | null;
   private currentTitle: string;
+  /** 无 id 的 mw-collapsible 容器自动编号 */
+  private collapsibleSeq: number = 0;
 
   constructor(index: WikiIndex | null, currentTitle: string) {
     this.index = index;
@@ -199,6 +226,11 @@ export class WikitextParser {
       if (htmlBlock.node !== null) {
         flush();
         out.push(htmlBlock.node as WikiNode);
+        if (htmlBlock.siblings !== undefined) {
+          for (const s of htmlBlock.siblings) {
+            out.push(s);
+          }
+        }
         i = htmlBlock.nextIndex;
         continue;
       }
@@ -416,58 +448,178 @@ export class WikitextParser {
     }
 
     // 同行开闭形态（<div ...>内容</div> 单行）：取标签间内容解析，
-    //  否则闭合标签在首行会被跨行收集逻辑漏掉（吞掉后续行）。
+    //  闭合位置按嵌套深度配平（内层 div 的 </div> 不提前闭合外层）；
+    //  闭合标签后的行尾余量解析为兄弟块（不属于容器内容）。
     //  注意在去缩进后的 t/lower 上取下标，保证二者对齐
     const openEnd = t.indexOf('>');
-    const closeIdx = openEnd >= 0 ? lower.indexOf(closeTag, openEnd + 1) : -1;
+    const closeIdx = openEnd >= 0 ? this.findBalancedClose(lower, openEnd + 1, openTag, closeTag) : -1;
     if (closeIdx >= 0) {
       const innerLines: string[] = [];
       const content = t.substring(openEnd + 1, closeIdx);
       if (content.trim().length > 0) {
         innerLines.push(content);
       }
-      const remainder = t.substring(closeIdx + closeTag.length);
+      const node = this.buildHtmlContainer(t, align, innerLines);
+      const siblings: WikiNode[] = [];
+      const remainder = t.substring(this.endOfCloseTag(t, closeIdx, closeTag));
       if (remainder.trim().length > 0) {
-        innerLines.push(remainder);
+        const rem = this.parseBlocks([remainder], 0, 1);
+        for (const s of rem) {
+          siblings.push(s);
+        }
       }
-      const node: WikiNode = {
-        type: NodeType.Container,
-        align: align.length > 0 ? align : undefined,
-        children: this.parseBlocks(innerLines, 0, innerLines.length),
-      };
-      return { node: node, nextIndex: start + 1 };
+      return { node: node, nextIndex: start + 1, siblings: siblings.length > 0 ? siblings : undefined };
     }
 
-    // 收集直到闭合标签
+    // 收集直到闭合标签（深度感知：嵌套同名标签不提前闭合）
     const inner: string[] = [];
     let i = start + 1;
     let closed = false;
+    let depth = 1;
+    let afterLines: string[] = [];
     while (i < end) {
-      if (lines[i].toLowerCase().indexOf(closeTag) >= 0) {
-        const cidx = lines[i].toLowerCase().indexOf(closeTag);
-        const before = lines[i].substring(0, cidx);
+      const line = lines[i];
+      const lowerLine = line.toLowerCase();
+      let pos = 0;
+      let closedAt = -1;
+      while (pos < lowerLine.length) {
+        const o = lowerLine.indexOf(openTag, pos);
+        const c = lowerLine.indexOf(closeTag, pos);
+        if (c < 0) {
+          if (o >= 0) {
+            depth++;
+            pos = o + openTag.length;
+            continue;
+          }
+          break;
+        }
+        if (o >= 0 && o < c) {
+          depth++;
+          pos = o + openTag.length;
+        } else {
+          depth--;
+          if (depth === 0) {
+            closedAt = c;
+            break;
+          }
+          pos = c + closeTag.length;
+        }
+      }
+      if (closedAt >= 0) {
+        const before = line.substring(0, closedAt);
         if (before.trim().length > 0) {
           inner.push(before);
+        }
+        const rest = line.substring(this.endOfCloseTag(line, closedAt, closeTag));
+        if (rest.trim().length > 0) {
+          afterLines = [rest];
         }
         closed = true;
         i++;
         break;
       }
-      inner.push(lines[i]);
+      inner.push(line);
       i++;
     }
-    const childLines = inner;
+    const node = this.buildHtmlContainer(t, align, inner);
+    if (!closed) {
+      // 未闭合：尽力渲染已收集内容
+      return { node: node, nextIndex: i };
+    }
+    const siblings: WikiNode[] = [];
+    if (afterLines.length > 0) {
+      const rem = this.parseBlocks(afterLines, 0, afterLines.length);
+      for (const s of rem) {
+        siblings.push(s);
+      }
+    }
+    return { node: node, nextIndex: i, siblings: siblings.length > 0 ? siblings : undefined };
+  }
+
+  /** 闭合标签的结束下标（closeTag 形如 '</div'，需再吞掉 '>' 及可能的空白） */
+  private endOfCloseTag(text: string, closeIdx: number, closeTag: string): number {
+    const gt = text.indexOf('>', closeIdx + closeTag.length);
+    return gt >= 0 ? gt + 1 : closeIdx + closeTag.length;
+  }
+
+  /** 从 from 起找配平的外层闭合标签下标（openTag 出现一次深度+1，closeTag 一次-1，归 0 处闭合） */
+  private findBalancedClose(lower: string, from: number, openTag: string, closeTag: string): number {
+    let depth = 1;
+    let i = from;
+    while (i < lower.length) {
+      const o = lower.indexOf(openTag, i);
+      const c = lower.indexOf(closeTag, i);
+      if (c < 0) {
+        return -1;
+      }
+      if (o >= 0 && o < c) {
+        depth++;
+        i = o + openTag.length;
+      } else {
+        depth--;
+        if (depth === 0) {
+          return c;
+        }
+        i = c + closeTag.length;
+      }
+    }
+    return -1;
+  }
+
+  /** 组装 HTML 块容器节点：解析 class/id（mw-collapsible 折叠标记）并挂接子块 */
+  private buildHtmlContainer(openTagRaw: string, align: string, innerLines: string[]): WikiNode {
     const node: WikiNode = {
       type: NodeType.Container,
       align: align.length > 0 ? align : undefined,
-      children: this.parseBlocks(childLines, 0, childLines.length),
+      children: this.parseBlocks(innerLines, 0, innerLines.length),
     };
-    return { node: node, nextIndex: i };
+    if (!/^<div\b/i.test(openTagRaw)) {
+      return node;
+    }
+    const cm = openTagRaw.match(/class\s*=\s*"([^"]*)"/i);
+    const cls = cm !== null ? cm[1] : '';
+    if (cls.length > 0) {
+      node.htmlClass = cls;
+      if (/\bmw-collapsible\b/.test(cls)) {
+        const im = openTagRaw.match(/id\s*=\s*"mw-customcollapsible-([^"\s]+)"/i);
+        node.collapsibleId = im !== null ? im[1] : 'auto' + (++this.collapsibleSeq);
+        node.collapsed = /\bmw-collapsed\b/.test(cls);
+      }
+    } else {
+      const im = openTagRaw.match(/id\s*=\s*"mw-customcollapsible-([^"\s]+)"/i);
+      if (im !== null) {
+        node.collapsibleId = im[1];
+        node.collapsed = false;
+      }
+    }
+    return node;
   }
 
-  /** 解析 HTML 列表 <ol>/<ul>：每个 <li>…</li> 一个列表项（支持跨行 li） */
+  /** 解析 HTML 列表 <ol>/<ul>：每个 <li>…</li> 一个列表项（支持跨行 li、嵌套列表、内嵌 div） */
   private parseHtmlList(lines: string[], start: number, end: number): ParsedBlock {
-    const ordered = lines[start].replace(/^\s+/, '').toLowerCase().startsWith('<ol');
+    const first = lines[start].replace(/^\s+/, '');
+    const lowerFirst = first.toLowerCase();
+    const ordered = lowerFirst.startsWith('<ol');
+    // 同行完整形式（模板展开产物常见）：<ol><li>…</li><li>…</li></ol>
+    const openTag = ordered ? '<ol' : '<ul';
+    const closeTag = ordered ? '</ol' : '</ul';
+    if (lowerFirst.indexOf(closeTag) >= 0) {
+      const openEnd = first.indexOf('>');
+      const closeIdx = openEnd >= 0 ? this.findBalancedClose(lowerFirst, openEnd + 1, openTag, closeTag) : -1;
+      if (closeIdx >= 0) {
+        const inner = first.substring(openEnd + 1, closeIdx);
+        const node = this.buildHtmlList(ordered, inner);
+        const siblings: WikiNode[] = [];
+        const rest = first.substring(this.endOfCloseTag(first, closeIdx, closeTag));
+        if (rest.trim().length > 0) {
+          const rem = this.parseBlocks([rest], 0, 1);
+          for (const s of rem) {
+            siblings.push(s);
+          }
+        }
+        return { node: node, nextIndex: start + 1, siblings: siblings.length > 0 ? siblings : undefined };
+      }
+    }
     const items: WikiNode[] = [];
     let i = start + 1;
     let current: string[] = [];
@@ -475,10 +627,7 @@ export class WikitextParser {
     let closed = false;
     const flushItem = (): void => {
       if (current.length > 0) {
-        items.push({
-          type: NodeType.ListItem,
-          inline: this.parseInline(current.join('\n').trim()),
-        });
+        items.push(this.makeHtmlListItem(current.join('\n').trim()));
         current = [];
       }
     };
@@ -500,19 +649,20 @@ export class WikitextParser {
           flushItem();
         }
         inItem = true;
-        // 同行闭合的 <li>xxx</li>：取标签间内容
-        const closeIdx = lower.indexOf('</li>');
-        if (closeIdx >= 0) {
-          const gt = lower.indexOf('>');
-          if (gt >= 0 && gt + 1 <= closeIdx) {
-            current.push(trimmed.substring(gt + 1, closeIdx));
+        const gt = lower.indexOf('>');
+        if (gt >= 0) {
+          const body = trimmed.substring(gt + 1);
+          // 同行闭合的 <li>xxx</li>：内嵌 </li> 不提前闭合——按 li 嵌套深度配平
+          const scan = this.lineCloseLi(body, 1);
+          if (scan.closeIdx >= 0) {
+            const piece = body.substring(0, scan.closeIdx);
+            if (piece.trim().length > 0) {
+              current.push(piece);
+            }
             flushItem();
             inItem = false;
-          }
-        } else {
-          const gt = lower.indexOf('>');
-          if (gt >= 0 && gt + 1 < trimmed.length) {
-            current.push(trimmed.substring(gt + 1));
+          } else if (body.trim().length > 0) {
+            current.push(body);
           }
         }
         i++;
@@ -525,10 +675,13 @@ export class WikitextParser {
         continue;
       }
       if (inItem) {
-        // li 内容续行（可能内嵌 </li> 尾部）
-        const closeIdx = lower.indexOf('</li>');
-        if (closeIdx >= 0) {
-          current.push(trimmed.substring(0, closeIdx));
+        // li 续行：内嵌嵌套列表的 </li> 不算外层闭合，深度配平归零才是本项结束
+        const scan = this.lineCloseLi(trimmed, 1);
+        if (scan.closeIdx >= 0) {
+          const before = trimmed.substring(0, scan.closeIdx);
+          if (before.trim().length > 0) {
+            current.push(before);
+          }
           flushItem();
           inItem = false;
         } else {
@@ -548,6 +701,135 @@ export class WikitextParser {
       children: items,
     };
     return { node: node, nextIndex: i };
+  }
+
+  /** 单行文本内找 li 深度归零位置（depthIn 为进入本行前的深度） */
+  private lineCloseLi(text: string, depthIn: number): LiScan {
+    const re = /<(\/?)li\b[^>]*>/gi;
+    let depth = depthIn;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      depth += m[1] === '/' ? -1 : 1;
+      if (depth === 0) {
+        const res: LiScan = { closeIdx: m.index, rest: text.substring(m.index + m[0].length) };
+        return res;
+      }
+    }
+    const none: LiScan = { closeIdx: -1, rest: '' };
+    return none;
+  }
+
+  /** 从列表 inner 文本切出各 li 项（嵌套列表归属其外层项）并建列表节点 */
+  private buildHtmlList(ordered: boolean, inner: string): WikiNode {
+    const items: WikiNode[] = [];
+    const re = /<(\/?)li\b[^>]*>/gi;
+    let depth = 0;
+    let itemStart = -1;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(inner)) !== null) {
+      if (m[1] === '/') {
+        depth--;
+        if (depth === 0) {
+          const raw = inner.substring(itemStart, m.index);
+          if (raw.trim().length > 0) {
+            items.push(this.makeHtmlListItem(raw));
+          }
+          itemStart = -1;
+        }
+      } else {
+        depth++;
+        if (depth === 1) {
+          itemStart = m.index + m[0].length;
+        }
+      }
+    }
+    if (depth >= 1 && itemStart >= 0) {
+      // 未闭合的尾项：尽力收
+      const raw = inner.substring(itemStart);
+      if (raw.trim().length > 0) {
+        items.push(this.makeHtmlListItem(raw));
+      }
+    }
+    return { type: ordered ? NodeType.OrderedList : NodeType.UnorderedList, children: items };
+  }
+
+  /** li 原文 → ListItem：前导行内文本进 inline（列表标号随行），
+   *  其后的顶层块级 HTML（div/ol/ul，如折叠内容、嵌套列表）进 children，
+   *  块间的尾随文本也按顺序包成 Paragraph 进 children（保持视觉顺序） */
+  private makeHtmlListItem(text: string): WikiNode {
+    const parts = this.splitTopBlocks(text);
+    const inline = parts.lead.trim().length > 0 ? this.parseInline(parts.lead) : [];
+    const node: WikiNode = { type: NodeType.ListItem, inline: inline };
+    if (parts.pieces.length > 0) {
+      node.children = [];
+      for (const p of parts.pieces) {
+        if (p.kind === 'text') {
+          const txt = (p.text ?? '').replace(/^(\s*<br\s*\/?>)+/i, '');
+          if (txt.trim().length > 0) {
+            (node.children as WikiNode[]).push({ type: NodeType.Paragraph, inline: this.parseInline(txt) });
+          }
+        } else {
+          const parsed = this.parseBlockChunk(p);
+          if (parsed !== null) {
+            (node.children as WikiNode[]).push(parsed);
+          }
+        }
+      }
+      if ((node.children as WikiNode[]).length === 0) {
+        node.children = undefined;
+      }
+    }
+    return node;
+  }
+
+  /** 把混合文本切为前导文本与顶层块级 HTML 片段（div/ol/ul 深度感知配平） */
+  private splitTopBlocks(text: string): TopSplit {
+    const out: TopSplit = { lead: '', pieces: [] };
+    const lower = text.toLowerCase();
+    const re = /<(div|ol|ul)\b[^>]*>/gi;
+    let cursor = 0;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      if (m.index < cursor) {
+        continue; // 已被前一块吞掉的嵌套标签
+      }
+      const kind = m[1].toLowerCase();
+      const openTag = '<' + kind;
+      const closeTag = '</' + kind;
+      const closeIdx = this.findBalancedClose(lower, m.index + m[0].length, openTag, closeTag);
+      if (closeIdx < 0) {
+        continue; // 未配平：当普通文本（行内解析会丢弃裸标签）
+      }
+      const chunkEnd = this.endOfCloseTag(text, closeIdx, closeTag);
+      const between = text.substring(cursor, m.index);
+      if (out.lead.length === 0 && out.pieces.length === 0) {
+        out.lead = between;
+      } else if (between.trim().length > 0) {
+        out.pieces.push({ kind: 'text', text: between });
+      }
+      out.pieces.push({ kind: kind, openTag: text.substring(m.index, m.index + m[0].length),
+        inner: text.substring(m.index + m[0].length, closeIdx) });
+      cursor = chunkEnd;
+    }
+    const tail = text.substring(cursor);
+    if (out.lead.length === 0 && out.pieces.length === 0) {
+      out.lead = tail;
+    } else if (tail.trim().length > 0) {
+      out.pieces.push({ kind: 'text', text: tail });
+    }
+    return out;
+  }
+
+  /** 单个顶层块级 HTML 片段 → 节点 */
+  private parseBlockChunk(p: HtmlChunk): WikiNode | null {
+    if (p.kind === 'div') {
+      const innerLines = (p.inner ?? '').split('\n');
+      return this.buildHtmlContainer(p.openTag ?? '', '', innerLines);
+    }
+    if (p.kind === 'ol' || p.kind === 'ul') {
+      return this.buildHtmlList(p.kind === 'ol', p.inner ?? '');
+    }
+    return null;
   }
 
   private parseGallery(lines: string[], start: number, end: number): ParsedBlock {
@@ -882,11 +1164,12 @@ export class WikitextParser {
           continue;
         }
       }
-      // HTML 标签
+      // HTML 标签：先 flush 前置文本再入 handler——handler 直接 push 节点，
+      //  后 flush 会把换行/样式节点排到前文之前（A<br>B 曾渲染为 ⏎AB）
       if (c === '<') {
+        flushPlain();
         const handled = this.handleInlineTag(text, i, out, flushPlain);
         if (handled !== null) {
-          flushPlain();
           i = handled;
           continue;
         }
@@ -1116,6 +1399,27 @@ export class WikitextParser {
       if (tagName === 'span' || tagName === 'div' || tagName === 'font' || tagName === 'small' ||
         tagName === 'big' || tagName === 'sup' || tagName === 'sub' || tagName === 'u' ||
         tagName === 's' || tagName === 'center' || tagName === 'abbr') {
+        // 折叠开关（MediaWiki mw-customtoggle-X）：包成带 toggleFor 的样式节点，渲染期接点击
+        if (!isClose) {
+          const tm = full.match(/class\s*=\s*"[^"]*\bmw-customtoggle-([^\s"]+)/i);
+          if (tm !== null) {
+            const toggleCloseTag = '</' + tagName + '>';
+            const tclose = lower.indexOf(toggleCloseTag, i + full.length);
+            if (tclose >= 0) {
+              const node: WikiNode = {
+                type: NodeType.Color,
+                inline: this.parseInline(text.substring(i + full.length, tclose)),
+                toggleFor: tm[1],
+              };
+              const tcolor = this.tagColor(full);
+              if (tcolor !== null) {
+                node.color = tcolor;
+              }
+              out.push(node);
+              return tclose + toggleCloseTag.length;
+            }
+          }
+        }
         // 带样式语义的容器（<font color> / style color / <small><big> 字号）：包成样式节点
         if (!isClose) {
           const color = this.tagColor(full);

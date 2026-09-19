@@ -2,6 +2,19 @@ import { InvokeHandler } from '../template/TemplateEngine';
 import { WikiSite } from '../../model/WikiTypes';
 import { HtmlPageConfig } from './HtmlPageConfig';
 
+/** HTML div class → 容器盒样式（站点 CSS 的离线近似，深浅色成对；由适配器提供，引擎只按标记渲染） */
+export interface HtmlBoxStyle {
+  /** 背景色（含透明度，如 'rgba(37,37,37,0.5)'） */
+  bgLight?: string;
+  bgDark?: string;
+  /** 边框色；underline=true 时只画底边 */
+  borderLight?: string;
+  borderDark?: string;
+  underline?: boolean;
+  radiusVp?: number;
+  padVp?: number;
+}
+
 /**
  * 站点适配器：提供某站点自身所需的能力（Lua 模块实现等）。
  * 引擎主流程只依赖本接口，不感知任何具体站点概念；
@@ -22,6 +35,8 @@ export interface SiteAdapter {
   pageFormat?: 'wikitext' | 'html';
   /** HTML 直渲染配置（pageFormat='html' 时必填）：站点知识全部集中于此 */
   htmlConfig?: HtmlPageConfig;
+  /** wikitext 页面 HTML div class → 盒样式表（可选）：渲染层按 class 标记查表装饰容器 */
+  htmlBoxStyles?: Map<string, HtmlBoxStyle>;
 }
 
 /**

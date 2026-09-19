@@ -365,6 +365,7 @@ export struct Reader {
             asking: this.asking,
             progressDone: this.progressDone,
             progressTotal: this.progressTotal,
+            boxStyles: AppStore.getActiveAdapter()?.htmlBoxStyles ?? null,
             onNavigate: (t: string): void => {
               this.navigate(t)
             }

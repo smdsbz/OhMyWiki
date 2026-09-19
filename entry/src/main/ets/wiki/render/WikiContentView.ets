@@ -1,11 +1,12 @@
 import { NodeType, WikiNode, GaugeSeg } from '../../model/WikiTypes';
+import { HtmlBoxStyle } from '../siteadapter/SiteAdapter';
 import { adaptSourceBg, adaptSourceFg } from './SourceColor';
 import { WikiImage } from './WikiImage';
 import { WikiMapView } from './WikiMapView';
 
 /** 行内渲染单元 */
 interface InlineRun {
-  kind: string; // 'text' | 'link' | 'image' | 'placeholder' | 'break' | 'gauge'
+  kind: string; // 'text' | 'link' | 'image' | 'placeholder' | 'break' | 'gauge' | 'toggle'
   inline?: WikiNode[];
   target?: string;
   fileName?: string;
@@ -19,6 +20,7 @@ interface InlineRun {
   color?: string; // 行内颜色（继承自 Color 节点）
   fontSize?: number; // 行内字号（继承自 <small>/<big>）
   bgColor?: string; // 行内背景色（继承自 Color 节点，如乱入黄底）
+  toggleId?: string; // 折叠开关目标（mw-customtoggle-X）
 }
 
 /** 表格行 + 原始行号（过滤后保持稳定 key） */
@@ -157,7 +159,7 @@ interface RichSpan {
 
 /** 行内渲染段：连续 text/link 合并为一个 rich 段（单个 Text 内多 Span，支持段内自然换行） */
 interface InlineSeg {
-  kind: string; // 'rich' | 'image' | 'placeholder' | 'break' | 'gauge'
+  kind: string; // 'rich' | 'image' | 'placeholder' | 'break' | 'gauge' | 'toggle'
   spans?: RichSpan[];
   fileName?: string;
   width?: number;
@@ -166,6 +168,7 @@ interface InlineSeg {
   reason?: string;
   gaugeSegs?: GaugeSeg[];
   gaugeHeight?: number;
+  toggleId?: string;
 }
 
 /** 行数达到该阈值的表格自动显示搜索框（任务/物品等 #ask 查询大表） */
@@ -209,8 +212,12 @@ export struct WikiContentView {
   @State tableFilters: Map<string, string> = new Map();
   /** 宽表冻结列行高同步表（key: 表key_行号 → 滚动区实测行高 vp） */
   @State wideRowH: Map<string, number> = new Map();
+  /** 折叠容器展开状态（key: collapsibleId；缺省值由节点 collapsed 字段决定，rebuild 时播种） */
+  @State expandedMap: Map<string, boolean> = new Map();
   /** 系统深浅色（EntryAbility 写入）：源数据颜色按显示模式换算 */
   @StorageProp('isDark') @Watch('onDarkChange') isDark: boolean = false;
+  /** 站点 HTML class → 盒样式表（Reader 从适配器解析传入；引擎不内置站点 CSS 知识） */
+  boxStyles: Map<string, HtmlBoxStyle> | null = null;
   onNavigate: (title: string) => void = (title: string) => {
   };
 
@@ -243,6 +250,85 @@ export struct WikiContentView {
       this.wideRowH = new Map();
     }
     this.rebuildItems();
+  }
+
+  /** 播种折叠容器默认展开态（mw-collapsed → 收起）：发生在任何 UI 读取前，直接写入即可 */
+  private seedCollapsibleDefaults(nodes: WikiNode[]): void {
+    const walk = (list: WikiNode[]): void => {
+      for (const n of list) {
+        if (n.collapsibleId !== undefined && !this.expandedMap.has(n.collapsibleId)) {
+          this.expandedMap.set(n.collapsibleId, !(n.collapsed === true));
+        }
+        if (n.children !== undefined) {
+          walk(n.children);
+        }
+        if (n.inline !== undefined) {
+          walk(n.inline);
+        }
+        if (n.caption !== undefined) {
+          walk(n.caption);
+        }
+      }
+    };
+    walk(nodes);
+  }
+
+  private collapsibleOpen(node: WikiNode): boolean {
+    return this.expandedMap.get(node.collapsibleId ?? '') ?? !(node.collapsed === true);
+  }
+
+  private toggleCollapse(id: string): void {
+    const m = new Map(this.expandedMap);
+    m.set(id, !(m.get(id) ?? false));
+    this.expandedMap = m;
+  }
+
+  /** 节点 htmlClass（可多 token）逐 token 查站点样式表 */
+  private boxStyleFor(node: WikiNode): HtmlBoxStyle | null {
+    if (this.boxStyles === null || node.htmlClass === undefined || node.htmlClass.length === 0) {
+      return null;
+    }
+    for (const token of node.htmlClass.split(/\s+/)) {
+      const st = this.boxStyles.get(token);
+      if (st !== undefined) {
+        return st;
+      }
+    }
+    return null;
+  }
+
+  private boxBgOf(node: WikiNode): ResourceColor {
+    const st = this.boxStyleFor(node);
+    if (st === null) {
+      return Color.Transparent;
+    }
+    const v = this.isDark ? st.bgDark : st.bgLight;
+    return v !== undefined && v.length > 0 ? v : Color.Transparent;
+  }
+
+  private boxBorderOf(node: WikiNode): BorderOptions {
+    const st = this.boxStyleFor(node);
+    if (st === null) {
+      return { width: 0 };
+    }
+    const v = this.isDark ? st.borderDark : st.borderLight;
+    if (v === undefined || v.length === 0) {
+      return { width: 0 };
+    }
+    if (st.underline === true) {
+      return { width: { bottom: 2 }, color: v };
+    }
+    return { width: 1, color: v };
+  }
+
+  private boxRadiusOf(node: WikiNode): number {
+    const st = this.boxStyleFor(node);
+    return st !== null && st.radiusVp !== undefined ? st.radiusVp : 0;
+  }
+
+  private boxPadOf(node: WikiNode): number | Padding {
+    const st = this.boxStyleFor(node);
+    return st !== null && st.padVp !== undefined ? st.padVp : 0;
   }
 
   build() {
@@ -380,6 +466,7 @@ export struct WikiContentView {
   /** nodes → 渲染项列表（首尾安全区留白 + 查询进度条 + 块级 + 巨型表拆行），整体 reload */
   private rebuildItems(): void {
     this.itemGen++;
+    this.seedCollapsibleDefaults(this.nodes);
     const items: RenderItem[] = [{ kind: 'pad', ti: 0, padVp: TOP_PAD_VP }];
     if (this.asking) {
       items.push({ kind: 'ask', ti: 0 });
@@ -668,7 +755,13 @@ export struct WikiContentView {
         current.push(tok);
       } else if (t === NodeType.Bold || t === NodeType.Italic || t === NodeType.BoldItalic ||
         t === NodeType.Color) {
-        if (this.containsInteractive(tok.inline ?? [])) {
+        if (tok.toggleFor !== undefined) {
+          // 折叠开关（mw-customtoggle）：独立 run，渲染期接点击切换折叠容器
+          flush();
+          runs.push({ kind: 'toggle', inline: tok.inline ?? [], toggleId: tok.toggleFor,
+            style: style, color: tok.color !== undefined ? tok.color : color,
+            fontSize: fontSize > 0 ? fontSize : undefined, bgColor: bg });
+        } else if (this.containsInteractive(tok.inline ?? [])) {
           flush();
           let childStyle = style;
           if (t === NodeType.Bold || t === NodeType.BoldItalic) {
@@ -720,6 +813,9 @@ export struct WikiContentView {
 
   private containsInteractive(inline: WikiNode[]): boolean {
     for (const tok of inline) {
+      if (tok.toggleFor !== undefined) {
+        return true;
+      }
       const t = tok.type;
       if (t === NodeType.Link || t === NodeType.FileImage || t === NodeType.Placeholder ||
         t === NodeType.LineBreak || t === NodeType.Gauge) {
@@ -807,13 +903,24 @@ export struct WikiContentView {
     } else if (node.type === NodeType.Placeholder) {
       this.renderPlaceholder(node)
     } else if (node.type === NodeType.Container) {
-      Column({ space: 0 }) {
-        ForEach(node.children ?? [], (n: WikiNode, idx: number) => {
-          this.renderBlock(n, tKey + 'c' + idx)
-        }, (n: WikiNode, idx: number) => 'c' + idx)
+      if (node.collapsibleId !== undefined && !this.collapsibleOpen(node)) {
+        // 收起态（mw-collapsed）：内容整体隐藏，与原站 display:none 一致
+        Column() {
+        }
+        .width('100%')
+      } else {
+        Column({ space: 0 }) {
+          ForEach(node.children ?? [], (n: WikiNode, idx: number) => {
+            this.renderBlock(n, tKey + 'c' + idx)
+          }, (n: WikiNode, idx: number) => 'c' + idx)
+        }
+        .width('100%')
+        .alignItems(node.align === 'center' ? HorizontalAlign.Center : HorizontalAlign.Start)
+        .backgroundColor(this.boxBgOf(node))
+        .border(this.boxBorderOf(node))
+        .borderRadius(this.boxRadiusOf(node))
+        .padding(this.boxPadOf(node))
       }
-      .width('100%')
-      .alignItems(node.align === 'center' ? HorizontalAlign.Center : HorizontalAlign.Start)
     } else if (node.type === NodeType.Link) {
       Text() {
         this.renderSpans(node.inline ?? [])
@@ -1441,6 +1548,14 @@ export struct WikiContentView {
       } else if (r.kind === 'break') {
         // <br>：并入当前 rich 段为换行符（同一 Text 内换行，行高一致）
         buf.push({ text: '\n', bold: false, italic: false, link: false, target: '', color: '' });
+      } else if (r.kind === 'toggle') {
+        flushRich();
+        segs.push({
+          kind: 'toggle',
+          toggleId: r.toggleId,
+          spans: this.normalizeSpans(this.flattenRich(r.inline ?? [], r.style, false, '',
+            r.color ?? '', r.fontSize ?? 0, r.bgColor ?? '')),
+        });
       } else {
         // 连续 gauge 之间的 <br> 冗余（gauge 全宽自然换行）
         if (r.kind === 'gauge' && buf.length > 0 && segs.length > 0 &&
@@ -1468,11 +1583,11 @@ export struct WikiContentView {
       }
     }
     flushRich();
-    // 列表标号并入首个 rich 段（避免标号单独占一行）
+    // 列表标号并入首个 rich/toggle 段（避免标号单独占一行；折叠开关文字同理）
     if (prefix.length > 0) {
       const mk: RichSpan = { text: prefix, bold: false, italic: false, link: false, target: '', color: '' };
       const first = segs.length > 0 ? segs[0] : null;
-      if (first !== null && first.kind === 'rich' && first.spans !== undefined) {
+      if (first !== null && (first.kind === 'rich' || first.kind === 'toggle') && first.spans !== undefined) {
         first.spans.unshift(mk);
       } else {
         segs.unshift({ kind: 'rich', spans: [mk] });
@@ -1535,6 +1650,10 @@ export struct WikiContentView {
         for (const s of sub) {
           out.push(s);
         }
+      } else if (t === NodeType.LineBreak) {
+        // 样式容器内嵌的 <br>（如折叠开关文字的多行说明）：并入同一 Text 为换行
+        out.push({ text: '\n', bold: bold, italic: italic, link: link, target: target,
+          color: color, fontSize: size, bgColor: bgSet });
       } else {
         out.push({ text: tok.text ?? '', bold: bold, italic: italic, link: link, target: target,
           color: color, fontSize: size, bgColor: bgSet });
@@ -1548,28 +1667,22 @@ export struct WikiContentView {
     ForEach(segs, (seg: InlineSeg, idx: number) => {
       if (seg.kind === 'rich') {
         Text() {
-          ForEach(seg.spans ?? [], (sp: RichSpan, si: number) => {
-            Span(sp.text)
-              .fontWeight(sp.bold ? FontWeight.Bold : FontWeight.Normal)
-              .fontStyle(sp.italic ? FontStyle.Italic : FontStyle.Normal)
-              .fontColor(sp.color.length > 0 ? adaptSourceFg(sp.color, this.isDark) :
-                (sp.link ? $r('app.color.link') : $r('app.color.text_body')))
-              .fontSize((sp.fontSize ?? 0) > 0 ? sp.fontSize : 15)
-              .textBackgroundStyle(sp.bgColor !== undefined && sp.bgColor.length > 0
-                ? { color: adaptSourceBg(sp.bgColor, this.isDark), radius: 2 }
-                : { color: Color.Transparent, radius: 0 })
-              .decoration(sp.link
-                ? { type: TextDecorationType.Underline, color: $r('app.color.link') }
-                : { type: TextDecorationType.None })
-              .onClick(() => {
-                if (sp.link && sp.target.length > 0) {
-                  this.onNavigate(sp.target);
-                }
-              })
-          }, (sp: RichSpan, si: number) => 'sp' + idx + '_' + si)
+          this.renderSpanList(seg.spans ?? [])
         }
         .fontSize(15)
         .lineHeight(this.segLineHeight(seg.spans ?? []))
+      } else if (seg.kind === 'toggle') {
+        // 折叠开关（mw-customtoggle）：整段文字可点，切换对应折叠容器
+        Text() {
+          this.renderSpanList(seg.spans ?? [])
+        }
+        .fontSize(15)
+        .lineHeight(this.segLineHeight(seg.spans ?? []))
+        .onClick(() => {
+          if ((seg.toggleId ?? '').length > 0) {
+            this.toggleCollapse(seg.toggleId as string);
+          }
+        })
       } else if (seg.kind === 'image') {
         if ((seg.width ?? 0) === 0 || ((seg.width as number) > 0 && (seg.width as number) <= 64)) {
           // 小尺寸注释（≤64px）的行内图标随文字流内联；无注释图由 WikiImage 按自然宽自适应
@@ -1662,6 +1775,45 @@ export struct WikiContentView {
       }
     }
     return out;
+  }
+
+  @Builder
+  renderSpanList(spans: RichSpan[]) {
+    ForEach(spans, (sp: RichSpan, si: number) => {
+      if (sp.link) {
+        Span(sp.text)
+          .fontWeight(sp.bold ? FontWeight.Bold : FontWeight.Normal)
+          .fontStyle(sp.italic ? FontStyle.Italic : FontStyle.Normal)
+          .fontColor(sp.color.length > 0 ? adaptSourceFg(sp.color, this.isDark) :
+            (sp.link ? $r('app.color.link') : $r('app.color.text_body')))
+          .fontSize((sp.fontSize ?? 0) > 0 ? sp.fontSize : 15)
+          .textBackgroundStyle(sp.bgColor !== undefined && sp.bgColor.length > 0
+            ? { color: adaptSourceBg(sp.bgColor, this.isDark), radius: 2 }
+            : { color: Color.Transparent, radius: 0 })
+          .decoration(sp.link
+            ? { type: TextDecorationType.Underline, color: $r('app.color.link') }
+            : { type: TextDecorationType.None })
+          .onClick(() => {
+            if (sp.link && sp.target.length > 0) {
+              this.onNavigate(sp.target);
+            }
+          })
+      } else {
+        // 非 link 的 Span 不挂 onClick：Span 事件不冒泡，会吞掉所在 Text（折叠开关）的点击
+        Span(sp.text)
+          .fontWeight(sp.bold ? FontWeight.Bold : FontWeight.Normal)
+          .fontStyle(sp.italic ? FontStyle.Italic : FontStyle.Normal)
+          .fontColor(sp.color.length > 0 ? adaptSourceFg(sp.color, this.isDark) :
+            (sp.link ? $r('app.color.link') : $r('app.color.text_body')))
+          .fontSize((sp.fontSize ?? 0) > 0 ? sp.fontSize : 15)
+          .textBackgroundStyle(sp.bgColor !== undefined && sp.bgColor.length > 0
+            ? { color: adaptSourceBg(sp.bgColor, this.isDark), radius: 2 }
+            : { color: Color.Transparent, radius: 0 })
+          .decoration(sp.link
+            ? { type: TextDecorationType.Underline, color: $r('app.color.link') }
+            : { type: TextDecorationType.None })
+      }
+    }, (sp: RichSpan, si: number) => 'sp' + si)
   }
 
   @Builder

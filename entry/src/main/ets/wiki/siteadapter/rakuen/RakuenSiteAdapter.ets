@@ -1,6 +1,6 @@
 import { Logger } from '../../../common/Logger';
 import { InvokeHandler, TemplateContext, PLACEHOLDER_MARK } from '../../template/TemplateEngine';
-import { SiteAdapter } from '../SiteAdapter';
+import { HtmlBoxStyle, SiteAdapter } from '../SiteAdapter';
 import { WikiSite } from '../../../model/WikiTypes';
 import { EnemyModule } from './EnemyModule';
 import { CollectionModule } from './CollectionModule';
@@ -25,6 +25,26 @@ const SEARCH_EXCLUDED_NS: string[] = [
   'JSON:', '帮助:', '项目:', '乐园数据管理室:',
 ];
 
+/** 站点皮肤（load.php modules=skins.timeless.xbxb.v6，2026-09-19 取证）：
+ *  .card{background:rgba(37,37,37,.5);border:1px solid #3e3e3e;padding:1em;margin:.5em}
+ *  .card .title{border-bottom:solid 2px #cccccc}
+ *  .quest-collapse{margin:.4em;padding:1em;background:rgba(42,136,116,.4);border-radius:.6em}
+ *  站点只有深色皮肤，浅色侧按系统成对灰阶取值（#2C2C2E↔#E5E5EA 一族） */
+const RAKUEN_BOX_STYLES: Map<string, HtmlBoxStyle> = new Map<string, HtmlBoxStyle>([
+  ['card', {
+    bgDark: 'rgba(37,37,37,0.5)', bgLight: 'rgba(229,229,234,0.6)',
+    borderDark: '#3e3e3e', borderLight: '#d1d1d6',
+    radiusVp: 8, padVp: 12,
+  }],
+  ['title', {
+    borderDark: '#cccccc', borderLight: '#3a3a3c', underline: true,
+  }],
+  ['quest-collapse', {
+    bgDark: 'rgba(42,136,116,0.4)', bgLight: 'rgba(42,136,116,0.15)',
+    radiusVp: 10, padVp: 12,
+  }],
+]);
+
 /**
  * rakuen-database（xenoblade2.cn 转储）站点适配器。
  * 该站点的 {{#invoke}} 模块以 ArkTS 移植实现注册于此；
@@ -32,6 +52,7 @@ const SEARCH_EXCLUDED_NS: string[] = [
  */
 export class RakuenSiteAdapter implements SiteAdapter {
   readonly searchExcludedNs: string[] = SEARCH_EXCLUDED_NS;
+  readonly htmlBoxStyles: Map<string, HtmlBoxStyle> = RAKUEN_BOX_STYLES;
 
   matches(site: WikiSite): boolean {
     return site.name === 'rakuen-database';

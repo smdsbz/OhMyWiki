@@ -136,6 +136,14 @@ export interface WikiNode {
   mapRatio?: number;
   /** 地图标记点 */
   mapMarkers?: MapMarker[];
+  /** HTML div 的 class 透传（如 card/quest-collapse，渲染期查适配器样式表解释） */
+  htmlClass?: string;
+  /** 折叠容器 key（mw-customcollapsible-X 的 X 段） */
+  collapsibleId?: string;
+  /** 折叠容器初始收起（class 含 mw-collapsed） */
+  collapsed?: boolean;
+  /** 行内开关目标（mw-customtoggle-X 的 X 段，点击切换对应折叠容器显隐） */
+  toggleFor?: string;
 }
 
 /** 行内 token 类型 */
