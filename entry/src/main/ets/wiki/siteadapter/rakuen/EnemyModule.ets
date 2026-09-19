@@ -1,78 +1,9 @@
 import { Logger } from '../../../common/Logger';
-import { TemplateContext, PLACEHOLDER_MARK } from '../../template/TemplateEngine';
+import { TemplateContext } from '../../template/TemplateEngine';
 import { JsonDataReader } from '../../module/JsonDataReader';
+import { BdatEnums } from './BdatEnums';
 
 const TAG = 'EnemyModule';
-
-// ---------- 模块:BdatEnums 移植（敌人武技所需五表） ----------
-
-/** ArtsType（Lua 1-based 列表） */
-const ENUM_ARTS_TYPE: string[] = [
-  '力量', '以太', '回复', '增益效果', '减益效果', 'Type6', 'Type7',
-  '召唤', '增援', '其他(防御向)', '格挡', '其他(暴食)',
-];
-
-/** ReActType（Lua 1-based 列表） */
-const ENUM_REACT: string[] = [
-  '破防', '倒地', '浮空', '猛击', '击退Lv1', '击退Lv2', '击退Lv3', '击退Lv4', '击退Lv5',
-  '吹飞Lv1', '吹飞Lv2', '吹飞Lv3', '吹飞Lv4', '吹飞Lv5', 'React15', 'React16',
-  '属性吸收', 'React18', 'React19', 'React20', '异刃牵绊降低', 'React22', '异刃牵绊降低',
-  'React24', 'React25', 'React26', '等级提升10', 'React28', 'React29', 'React30',
-  'React31', 'React32', 'React33', '异刃连击缩短', '随机元素属性变化', 'React36', 'React37',
-  '地面火圈', 'React39', 'React40', 'React41', 'React42', 'React43', 'React44', 'React45',
-];
-
-function enumArtsType(t: number): string {
-  return t >= 1 && t <= ENUM_ARTS_TYPE.length ? ENUM_ARTS_TYPE[t - 1] : '';
-}
-
-function enumReAct(t: number): string {
-  return t >= 1 && t <= ENUM_REACT.length ? ENUM_REACT[t - 1] : '';
-}
-
-function enumArtsTarget(t: number): string {
-  switch (t) {
-    case 0: return '敌方目标';
-    case 1: return '自身';
-    case 2: return '';
-    case 3: return '我方全体';
-    case 4: return '敌方全体';
-    default: return '';
-  }
-}
-
-function enumArtsRange(t: number): string {
-  switch (t) {
-    case 0: return '单体';
-    case 1: return '圆形';
-    case 2: return '前方';
-    case 3: return '后方';
-    case 4: return 'Unknown4';
-    case 5: return '自身周围';
-    case 6: return '范围';
-    default: return '';
-  }
-}
-
-function enumArtsBuff(t: number): string {
-  switch (t) {
-    case 2: return '100%回避';
-    case 3: return '100%格挡';
-    case 4: return '无敌';
-    case 5: return '伤害反弹';
-    case 6: return '回避 反击';
-    case 7: return '回避 反击 浮空';
-    case 8: return '自身倒地';
-    case 9: return 'unknown9';
-    case 11: return '自身破防';
-    case 12: return '自身浮空';
-    case 13: return 'unknown13';
-    case 15: return '伤害吸收盾';
-    case 16: return '吸收盾爆炸';
-    case 17: return '伤害吸收';
-    default: return '';
-  }
-}
 
 // ---------- JSON 结构 ----------
 
@@ -295,6 +226,8 @@ export class EnemyModule {
   }
 
   private static async renderMain(ctx: TemplateContext): Promise<string> {
+    // BdatEnums（武技枚举查表）随转储动态加载
+    await BdatEnums.ensure(ctx);
     const fullTitle = ctx.pageTitle;
     const torna = fullTitle.startsWith('黄金之国');
     let name = fullTitle;
@@ -522,16 +455,16 @@ export class EnemyModule {
   /** 单条武技解析（对应 Lua parseArtsEn / parseArtsBl） */
   private static async parseArt(ctx: TemplateContext, arts: Record<string, Object>,
     artsId: number, isBlade: boolean, torna: boolean): Promise<ArtRow | null> {
-    const artsType = enumArtsType(EnemyModule.num(arts['ArtsType']));
+    const artsType = BdatEnums.get('ArtsType', EnemyModule.num(arts['ArtsType']));
     const buffId = EnemyModule.num(arts['ArtsBuff']);
-    const artsBuff = buffId > 0 ? enumArtsBuff(buffId) : '';
+    const artsBuff = buffId > 0 ? BdatEnums.get('ArtsBuff', buffId) : '';
     let deBuff = '';
     const deBuffId = EnemyModule.num(arts['ArtsDeBuff']);
     if (deBuffId > 0) {
       const buff = await JsonDataReader.read(ctx, 'BTL_Buff/' + deBuffId) as BuffJson | null;
       deBuff = buff?.Name ?? '';
     }
-    const target = enumArtsTarget(EnemyModule.num(arts['Target']));
+    const target = BdatEnums.get('ArtsTarget', EnemyModule.num(arts['Target']));
     // 伤害倍率：敌方武技 DmgMgn / 异刃必杀 DmgMgn6；自身/减益类为 0
     let dmgBase = EnemyModule.num(arts[isBlade ? 'DmgMgn6' : 'DmgMgn']);
     if (target === '自身' || artsType === '减益效果') {
@@ -584,7 +517,7 @@ export class EnemyModule {
     mainCells.push(name);
     mainCells.push(artsType);
     mainCells.push(target);
-    mainCells.push(enumArtsRange(EnemyModule.num(arts['RangeType'])));
+    mainCells.push(BdatEnums.get('ArtsRangeType', EnemyModule.num(arts['RangeType'])));
     mainCells.push(dmgTotal);
     if (!isBlade) {
       mainCells.push(String(Math.round(EnemyModule.num(arts['Recast']) / 30 * 100) / 100) + '秒');
@@ -634,7 +567,7 @@ export class EnemyModule {
     const reAct: string[] = [];
     for (let i = 1; i <= 16; i++) {
       const r = EnemyModule.num(arts['ReAct' + i]);
-      reAct.push(r > 0 ? enumReAct(r) : '');
+      reAct.push(r > 0 ? BdatEnums.get('ReActType', r) : '');
     }
     const hitLines: string[] = [];
     let dmgTotal = 0;
