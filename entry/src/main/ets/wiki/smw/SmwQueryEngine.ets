@@ -26,6 +26,8 @@ interface AskQuery {
   nsPrefix: string | null;
   /** 裸页面名条件（如 [[Ver.1.1.0]]）：候选集 = 该单页 */
   pageTitle: string | null;
+  /** 标题前缀条件（如 [[~TIGER! TIGER!/*]]）：候选集 = 该前缀子页 */
+  titleLike: string | null;
   /** format=template 的模板名（template= 参数） */
   templateName: string;
   /** 属性过滤（AND） */
@@ -271,6 +273,7 @@ export class SmwQueryEngine implements AskHandler {
     const q: AskQuery = {
       nsPrefix: null,
       pageTitle: null,
+      titleLike: null,
       templateName: '',
       propFilters: [],
       displayProps: [],
@@ -351,6 +354,20 @@ export class SmwQueryEngine implements AskHandler {
       }
       return;
     }
+    // 标题前缀（子页通配）[[~前缀/*]]：候选集 = 前缀子页
+    if (inner.startsWith('~')) {
+      const pat = inner.substring(1).trim();
+      if (pat.endsWith('/*')) {
+        const prefix = pat.substring(0, pat.length - 2);
+        if (prefix.length > 0) {
+          q.titleLike = prefix;
+        }
+      } else if (pat.length > 0) {
+        // 无通配：按包含语义近似为前缀（SMW ~ 为 SQL LIKE，站点语料仅前缀用法）
+        q.titleLike = pat;
+      }
+      return;
+    }
     // 命名空间前缀 [[ns:+]]
     if (inner.endsWith(':+')) {
       const ns = inner.substring(0, inner.length - 2).trim();
@@ -373,6 +390,9 @@ export class SmwQueryEngine implements AskHandler {
     // 裸名单页条件优先：候选 = 1 页
     if (q.pageTitle !== null) {
       return ctx.index.pageExists(q.pageTitle) ? [q.pageTitle] : [];
+    }
+    if (q.titleLike !== null) {
+      return ctx.index.titlesByPrefix(q.titleLike);
     }
     if (q.nsPrefix !== null) {
       return ctx.index.titlesByPrefix(q.nsPrefix);

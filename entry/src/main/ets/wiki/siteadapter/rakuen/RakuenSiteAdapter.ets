@@ -6,6 +6,9 @@ import { EnemyModule } from './EnemyModule';
 import { CollectionModule } from './CollectionModule';
 import { SalvageModule } from './SalvageModule';
 import { TboxModule } from './TboxModule';
+import { QuestModule } from './QuestModule';
+import { HanaPartsModule } from './HanaPartsModule';
+import { TigerTigerModule } from './TigerTigerModule';
 
 const TAG = 'RakuenSiteAdapter';
 
@@ -85,6 +88,12 @@ class RakuenModuleHost implements InvokeHandler {
           return await SalvageModule.invoke(func, args, ctx);
         case 'tbox':
           return await TboxModule.invoke(func, args, ctx);
+        case 'quest':
+          return await QuestModule.invoke(func, args, ctx);
+        case 'hanaparts':
+          return await HanaPartsModule.invoke(func, args, ctx);
+        case 'tigertiger':
+          return await TigerTigerModule.invoke(func, args, ctx);
         default:
           return PLACEHOLDER_MARK + 'Lua 模块 ' + module + ' 未实现（离线版暂不支持）' + '\u0000';
       }

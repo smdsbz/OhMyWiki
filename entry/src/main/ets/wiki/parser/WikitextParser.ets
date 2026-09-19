@@ -1356,6 +1356,17 @@ export class WikitextParser {
       }
       return i;
     }
+    // Web 嵌入（bilibili iframe 等）：无法离线呈现，显式占位而非静默丢弃
+    if (lower.startsWith('<iframe', i) || lower.startsWith('<video', i) ||
+      lower.startsWith('<embed', i) || lower.startsWith('<audio', i)) {
+      const selfClose = lower.indexOf('>', i);
+      if (selfClose >= 0) {
+        out.push({ type: NodeType.Placeholder, reason: '嵌入视频/外部内容（离线版暂不支持）' });
+        return selfClose + 1;
+      }
+      const closeGuess = lower.indexOf('</' + (lower.startsWith('<iframe', i) ? 'iframe' : 'video'), i);
+      return closeGuess >= 0 ? closeGuess : i;
+    }
     // <gallery> 等块级残留 → 忽略（ol/ul/li 由 parseHtmlList 块级处理，此处为行内兜底）
     if (lower.startsWith('<gallery', i) || lower.startsWith('<imagemap', i) ||
       lower.startsWith('<templatestyles', i) || lower.startsWith('<references', i) ||

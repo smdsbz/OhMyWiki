@@ -2,7 +2,8 @@ import { fileIo } from '@kit.CoreFileKit';
 import { Logger } from '../../common/Logger';
 
 const TAG = 'PropsCacheStore';
-const SCHEMA_VERSION = 4;
+/** v6：TigerTigerModule 新增 TT宝箱/逐宝箱出率 捕获（物品与零件页获得方式 TIGER! TIGER! 查询） */
+const SCHEMA_VERSION = 6;
 /** 同站点写盘节流间隔（ms）：#show 密集页多次 flush 合并为末次 */
 const SAVE_THROTTLE_MS = 2000;
 
