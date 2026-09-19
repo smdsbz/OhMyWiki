@@ -605,6 +605,12 @@ export struct WikiContentView {
       }, (cell: WikiNode, cIdx: number) => 'cell' + (cell.colIndex ?? 0))
     }
     .width('100%')
+    .onClick(() => {
+      // 行级折叠开关（|- class="mw-customtoggle-X"，如敌人武技行点击展开明细）
+      if (row.toggleFor !== undefined && row.toggleFor.length > 0) {
+        this.toggleCollapse(row.toggleFor as string);
+      }
+    })
   }
 
   // ---------- 表格搜索过滤 ----------
@@ -685,14 +691,22 @@ export struct WikiContentView {
     const allRows = (node.children ?? []) as WikiNode[];
     const out: TableRowPair[] = [];
     const kw = this.tableFilterOf(tKey);
+    const collapseSkip = (r: WikiNode): boolean => {
+      return r.collapsibleId !== undefined && !this.collapsibleOpen(r);
+    };
     if (kw.length === 0 || !this.tableFilterable(node)) {
       for (let i = 0; i < allRows.length; i++) {
-        out.push({ row: allRows[i], ri: i });
+        if (!collapseSkip(allRows[i])) {
+          out.push({ row: allRows[i], ri: i });
+        }
       }
       return out;
     }
     const terms = kw.split(/\s+/).filter((s: string) => s.length > 0);
     for (let i = 0; i < allRows.length; i++) {
+      if (collapseSkip(allRows[i])) {
+        continue;
+      }
       if (i === 0 || this.rowMatches(allRows[i], terms)) {
         out.push({ row: allRows[i], ri: i });
       }

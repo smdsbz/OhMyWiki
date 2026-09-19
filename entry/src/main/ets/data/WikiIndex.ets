@@ -177,7 +177,9 @@ export class WikiIndex {
 
   /** 标题规范化（下划线→空格、首字母大小写兼容） */
   private normalizeTitle(t: string): string {
-    return t.replace(/_/g, ' ').trim();
+    // MediaWiki 标题规范会静默剥掉双向控制符（LRM/RLM 等）——
+    //  站内链接目标常残留复制粘贴带进的 U+200E（如 [[武技卡‎‎]]），不剥则解析失败退化为纯文本
+    return t.replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '').replace(/_/g, ' ').trim();
   }
 
   pageCount(): number {

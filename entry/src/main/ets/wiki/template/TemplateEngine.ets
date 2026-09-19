@@ -10,8 +10,15 @@ export interface InvokeHandler {
 }
 
 /** #ask/#show 语义查询分发接口（由 SmwQueryEngine 实现） */
+/** 结构化查询结果行（AskHandler.queryRows 用；SmwQueryEngine.Row 结构兼容） */
+export interface AskRow {
+  title: string;
+}
+
 export interface AskHandler {
   query(args: string[], ctx: TemplateContext, isShow: boolean): Promise<string>;
+  /** 结构化查询（可选，SmwQueryEngine 提供）：返回结果行（页面+属性），供站点模块内部消费 */
+  queryRows?(args: string[], ctx: TemplateContext): Promise<Array<AskRow>>;
 }
 
 /** 惰性登记的 #ask/#show（渐进渲染：Reader 后台执行后回填占位标记） */

@@ -573,26 +573,34 @@ export class WikitextParser {
       align: align.length > 0 ? align : undefined,
       children: this.parseBlocks(innerLines, 0, innerLines.length),
     };
-    if (!/^<div\b/i.test(openTagRaw)) {
-      return node;
-    }
-    const cm = openTagRaw.match(/class\s*=\s*"([^"]*)"/i);
-    const cls = cm !== null ? cm[1] : '';
-    if (cls.length > 0) {
-      node.htmlClass = cls;
-      if (/\bmw-collapsible\b/.test(cls)) {
-        const im = openTagRaw.match(/id\s*=\s*"mw-customcollapsible-([^"\s]+)"/i);
-        node.collapsibleId = im !== null ? im[1] : 'auto' + (++this.collapsibleSeq);
-        node.collapsed = /\bmw-collapsed\b/.test(cls);
+    if (/^<div\b/i.test(openTagRaw)) {
+      const cm = openTagRaw.match(/class\s*=\s*"([^"]*)"/i);
+      if (cm !== null && cm[1].length > 0) {
+        node.htmlClass = cm[1];
       }
-    } else {
-      const im = openTagRaw.match(/id\s*=\s*"mw-customcollapsible-([^"\s]+)"/i);
-      if (im !== null) {
-        node.collapsibleId = im[1];
-        node.collapsed = false;
-      }
+      this.applyCollapsibleAttrs(openTagRaw, node);
     }
     return node;
+  }
+
+  /** 开标签属性中的 MediaWiki 折叠标记：class 含 mw-customtoggle-X → toggleFor；
+   *  class 含 mw-collapsible（id=mw-customcollapsible-X）→ collapsibleId/collapsed。
+   *  容器与表格行（|- class=…）共用 */
+  private applyCollapsibleAttrs(attrText: string, node: WikiNode): void {
+    const cm = attrText.match(/class\s*=\s*"([^"]*)"/i);
+    if (cm === null) {
+      return;
+    }
+    const cls = cm[1];
+    const tm = cls.match(/\bmw-customtoggle-([^\s"]+)/);
+    if (tm !== null) {
+      node.toggleFor = tm[1];
+    }
+    if (/\bmw-collapsible\b/.test(cls)) {
+      const im = attrText.match(/id\s*=\s*"mw-customcollapsible-([^"\s]+)"/i);
+      node.collapsibleId = im !== null ? im[1] : 'auto' + (++this.collapsibleSeq);
+      node.collapsed = /\bmw-collapsed\b/.test(cls);
+    }
   }
 
   /** 解析 HTML 列表 <ol>/<ul>：每个 <li>…</li> 一个列表项（支持跨行 li、嵌套列表、内嵌 div） */
@@ -862,6 +870,7 @@ export class WikitextParser {
     const rows: WikiNode[] = [];
     let caption: WikiNode[] | null = null;
     let currentRow: WikiNode | null = null;
+    let rowAttrs = '';
     let i = start + 1;
     // rowspan 占位跟踪：行号 -> 该行被上方 rowspan 占用的列集合
     const rowspanOcc: Map<number, Set<number>> = new Map();
@@ -918,12 +927,19 @@ export class WikitextParser {
       }
       if (t.startsWith('|-')) {
         pushRow();
+        // 行属性（|- class="mw-customtoggle-X" / |- class="mw-collapsible mw-collapsed" id=…）：
+        //  行级折叠标记，待该行首个单元格建行时套用
+        rowAttrs = t.substring(2);
         i++;
         continue;
       }
       if (t.startsWith('|') || t.startsWith('!')) {
         if (currentRow === null) {
           currentRow = { type: NodeType.TableRow, children: [] };
+          if (rowAttrs.length > 0) {
+            this.applyCollapsibleAttrs(rowAttrs, currentRow);
+            rowAttrs = '';
+          }
         }
         const isHeader = t.charAt(0) === '!';
         let seg = t.substring(1);
