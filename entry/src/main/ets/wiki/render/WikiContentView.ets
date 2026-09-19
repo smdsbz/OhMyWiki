@@ -1,4 +1,5 @@
 import { NodeType, WikiNode, GaugeSeg } from '../../model/WikiTypes';
+import { adaptSourceBg, adaptSourceFg } from './SourceColor';
 import { WikiImage } from './WikiImage';
 import { WikiMapView } from './WikiMapView';
 
@@ -71,8 +72,17 @@ export struct WikiContentView {
   @State tableFilters: Map<string, string> = new Map();
   /** 宽表冻结列行高同步表（key: 表key_行号 → 滚动区实测行高 vp） */
   @State wideRowH: Map<string, number> = new Map();
+  /** 系统深浅色（EntryAbility 写入）：源数据颜色按显示模式换算 */
+  @StorageProp('isDark') @Watch('onDarkChange') isDark: boolean = false;
+  /** 深浅色切换代数：并入块级 ForEach key。资源色（$r）切换时系统自动刷新，
+   但源数据字符串色（cellBg/Span fontColor）绑定在 ForEach 子树里，key 不变则不重建、颜色停留旧模式 */
+  @State darkRev: number = 0;
   onNavigate: (title: string) => void = (title: string) => {
   };
+
+  onDarkChange(): void {
+    this.darkRev += 1;
+  }
 
   /** 页面切换（renderKey 变化）时清空表格过滤状态与行高同步表 */
   onRenderKeyChange(): void {
@@ -88,7 +98,7 @@ export struct WikiContentView {
     Column({ space: 0 }) {
       ForEach(this.nodes, (node: WikiNode, index: number) => {
         this.renderBlock(node, 'b' + index)
-      }, (node: WikiNode, index: number) => 'k' + this.renderKey + '_' + index)
+      }, (node: WikiNode, index: number) => 'k' + this.renderKey + '_' + this.darkRev + '_' + index)
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start)
@@ -196,10 +206,10 @@ export struct WikiContentView {
     return 15;
   }
 
-  /** 单元格背景：源数据 bgColor（如乱入标记赤底）优先，否则表头/表体主题色 */
+  /** 单元格背景：源数据 bgColor（如乱入标记赤底）优先（按显示模式换算），否则表头/表体主题色 */
   private cellBg(cell: WikiNode): ResourceColor {
     if (cell.bgColor !== undefined && cell.bgColor.length > 0) {
-      return cell.bgColor;
+      return adaptSourceBg(cell.bgColor, this.isDark);
     }
     return cell.type === NodeType.TableHeaderCell
       ? $r('app.color.table_header_bg') : $r('app.color.table_bg');
@@ -1132,11 +1142,11 @@ export struct WikiContentView {
             Span(sp.text)
               .fontWeight(sp.bold ? FontWeight.Bold : FontWeight.Normal)
               .fontStyle(sp.italic ? FontStyle.Italic : FontStyle.Normal)
-              .fontColor(sp.color.length > 0 ? sp.color :
+              .fontColor(sp.color.length > 0 ? adaptSourceFg(sp.color, this.isDark) :
                 (sp.link ? $r('app.color.link') : $r('app.color.text_body')))
               .fontSize((sp.fontSize ?? 0) > 0 ? sp.fontSize : 15)
               .textBackgroundStyle(sp.bgColor !== undefined && sp.bgColor.length > 0
-                ? { color: sp.bgColor, radius: 2 }
+                ? { color: adaptSourceBg(sp.bgColor, this.isDark), radius: 2 }
                 : { color: Color.Transparent, radius: 0 })
               .decoration(sp.link
                 ? { type: TextDecorationType.Underline, color: $r('app.color.link') }
@@ -1251,7 +1261,7 @@ export struct WikiContentView {
         Span(frag.text)
           .fontWeight(frag.bold ? FontWeight.Bold : FontWeight.Normal)
           .fontStyle(frag.italic ? FontStyle.Italic : FontStyle.Normal)
-          .fontColor(frag.color)
+          .fontColor(adaptSourceFg(frag.color, this.isDark))
       } else if ((frag.fontSize ?? 0) > 0) {
         Span(frag.text)
           .fontWeight(frag.bold ? FontWeight.Bold : FontWeight.Normal)

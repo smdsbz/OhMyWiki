@@ -48,6 +48,8 @@ export default class EntryAbility extends UIAbility {
     // Main window is created, set main page for this ability
     hilog.info(DOMAIN, 'testTag', '%{public}s', 'Ability onWindowStageCreate');
     this.windowStage = windowStage;
+    // 页面构建前写入深浅色标记，避免深色模式首帧用浅色适配（源数据颜色换算用）
+    this.syncDarkFlag();
 
     windowStage.loadContent('pages/Index', (err) => {
       if (err.code) {
@@ -62,21 +64,35 @@ export default class EntryAbility extends UIAbility {
   private windowStage: window.WindowStage | null = null;
 
   /** 窗口底色与页面背景（comp_background_gray）同步：状态栏区域显同色，无接缝 */
-  private syncWindowBg(): void {
+  private syncWindowBg(cfg?: Configuration): void {
+    const dark = this.syncDarkFlag(cfg);
     if (this.windowStage === null) {
       return;
     }
     try {
-      const dark = this.context.config.colorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK;
       this.windowStage.getMainWindowSync().setWindowBackgroundColor(dark ? '#000000' : '#F0F3F5');
     } catch (err) {
       hilog.warn(DOMAIN, 'testTag', 'setWindowBackgroundColor failed: %{public}s', JSON.stringify(err));
     }
   }
 
+  /** 系统深浅色 → AppStorage（源数据颜色按模式换算的渲染依赖）。
+   *  onConfigurationUpdate 时 this.context.config 仍是旧快照，必须用入参 newConfig */
+  private syncDarkFlag(cfg?: Configuration): boolean {
+    try {
+      const config = cfg ?? this.context.config;
+      const dark = config.colorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK;
+      AppStorage.setOrCreate('isDark', dark);
+      return dark;
+    } catch (err) {
+      hilog.warn(DOMAIN, 'testTag', 'syncDarkFlag failed: %{public}s', JSON.stringify(err));
+      return false;
+    }
+  }
+
   onConfigurationUpdate(newConfig: Configuration): void {
     // 深浅色切换时重新同步窗口底色
-    this.syncWindowBg();
+    this.syncWindowBg(newConfig);
   }
 
   onWindowStageDestroy(): void {
