@@ -27,6 +27,122 @@ interface TableRowPair {
   ri: number;
 }
 
+/** 渲染项：普通块 / 巨型表拆分后的表头与行 / 首尾安全区留白 / 后台查询进度条（LazyForEach 数据单元） */
+interface RenderItem {
+  kind: 'block' | 'thead' | 'trow' | 'pad' | 'ask';
+  /** 所属顶层块在 nodes 中的下标（key 与过滤键的组成部分） */
+  ti: number;
+  block?: WikiNode;
+  /** thead/trow 所属表格节点 */
+  table?: WikiNode;
+  /** trow 行节点 */
+  row?: WikiNode;
+  /** trow 原始行号（key 稳定） */
+  ri?: number;
+  /** trow 是否为可见首/末行（外边框与圆角归属） */
+  first?: boolean;
+  last?: boolean;
+  /** pad：留白高度（vp）。List 自身不能设 padding——那是视口内缩，
+   *  内容会被裁在标题栏/导航条之外（沉浸失效），留白必须作为内容滚动 */
+  padVp?: number;
+}
+
+/** LazyForEach 数据源：块/拆分行渲染项 */
+class RenderItemSource implements IDataSource {
+  private items: RenderItem[] = [];
+  private listeners: DataChangeListener[] = [];
+
+  totalCount(): number {
+    return this.items.length;
+  }
+
+  getData(index: number): RenderItem {
+    return this.items[index];
+  }
+
+  registerDataChangeListener(listener: DataChangeListener): void {
+    if (this.listeners.indexOf(listener) < 0) {
+      this.listeners.push(listener);
+    }
+  }
+
+  unregisterDataChangeListener(listener: DataChangeListener): void {
+    const i = this.listeners.indexOf(listener);
+    if (i >= 0) {
+      this.listeners.splice(i, 1);
+    }
+  }
+
+  reload(items: RenderItem[]): void {
+    this.items = items;
+    for (const l of this.listeners) {
+      l.onDataReloaded();
+    }
+  }
+
+  /** thead(ti) 的下标；不存在返回 -1 */
+  headIndex(ti: number): number {
+    for (let i = 0; i < this.items.length; i++) {
+      const it = this.items[i];
+      if (it.kind === 'thead' && it.ti === ti) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  /** thead(ti) 之后连续 trow(ti) 的数量 */
+  rowCountAfter(ti: number): number {
+    let n = 0;
+    for (let i = this.headIndex(ti) + 1; i < this.items.length; i++) {
+      const it = this.items[i];
+      if (it.kind === 'trow' && it.ti === ti) {
+        n++;
+      } else {
+        break;
+      }
+    }
+    return n;
+  }
+
+  /** 区间替换（过滤增删行）：thead 不在区间内 → 不重建、搜索框焦点不丢 */
+  replaceRange(start: number, oldCount: number, newItems: RenderItem[]): void {
+    if (oldCount > 0) {
+      this.items.splice(start, oldCount);
+      for (let i = start + oldCount - 1; i >= start; i--) {
+        for (const l of this.listeners) {
+          l.onDataDelete(i);
+        }
+      }
+    }
+    if (newItems.length > 0) {
+      for (let i = 0; i < newItems.length; i++) {
+        this.items.splice(start + i, 0, newItems[i]);
+      }
+      for (let i = 0; i < newItems.length; i++) {
+        for (const l of this.listeners) {
+          l.onDataAdd(start + i);
+        }
+      }
+    }
+  }
+
+  /** 单点插入/删除（进度条项的出现与消失） */
+  insertAt(idx: number, item: RenderItem): void {
+    this.items.splice(idx, 0, item);
+    for (const l of this.listeners) {
+      l.onDataAdd(idx);
+    }
+  }
+
+  removeAt(idx: number): void {
+    this.items.splice(idx, 1);
+    for (const l of this.listeners) {
+      l.onDataDelete(idx);
+    }
+  }
+}
+
 /** 富文本 Span：文本片段（可带链接） */
 interface RichSpan {
   text: string;
@@ -60,31 +176,65 @@ const WIDE_TABLE_MIN_COLS = 7;
 const TABLE_COL_MIN_VP = 86;
 /** 宽表冻结首列宽度（vp） */
 const WIDE_TABLE_FROZEN_W = 120;
+/** 无 rowspan 非宽表超过该行数 → 按行拆分为独立渲染项（武器派生单表 400-600 行，
+ *  整表一个块会让任何按块分批/懒加载失效） */
+const TABLE_SPLIT_MIN_ROWS = 40;
+/** 顶部留白：状态栏+迷你标题栏全高（ignoreLayoutSafeArea 后视口含状态栏，实测 104vp） */
+const TOP_PAD_VP = 104;
+/** 底部留白（vp） */
+const BOTTOM_PAD_VP = 32;
 
 /**
  * wiki 节点树渲染器：把 WikiNode[] 渲染为 ArkUI 组件。
+ * 外层 List + LazyForEach 按视口懒构建（大页面 5-15 万组件不再一次性全量构建）；
+ * 巨型普通表（武器派生单表数百行）拆成 thead + 独立行渲染项。
  * 行内文本用 Flex wrap + 分段 Text（链接为独立可点击 Text）。
  */
 @Component
 export struct WikiContentView {
-  @Prop nodes: WikiNode[] = [];
+  /** 节点树按引用共享（@Prop 会在每次同步时深拷贝整棵树，大页面不可承受） */
+  @Link nodes: WikiNode[];
   @Prop @Watch('onRenderKeyChange') renderKey: number = 0;
+  /** 阶段 2 后台查询进度：作为列表首项渲染（页面内容顶端、随内容滚动） */
+  @Prop @Watch('onAskingChange') asking: boolean = false;
+  @Prop progressDone: number = 0;
+  @Prop progressTotal: number = 0;
+  /** 外部滚动控制器（HDS 标题栏模糊绑定） */
+  scroller: Scroller | null = null;
+  private source: RenderItemSource = new RenderItemSource();
+  /** 渲染项代数：每次 rebuild 递增并入 key。LazyForEach 的 onDataReloaded
+   *  按 key 复用旧条目——key 不变就不重建（阶段2回填后旧占位条目残留），
+   *  换代 key 强制全量重建 */
+  private itemGen: number = 0;
   @State tableFilters: Map<string, string> = new Map();
   /** 宽表冻结列行高同步表（key: 表key_行号 → 滚动区实测行高 vp） */
   @State wideRowH: Map<string, number> = new Map();
   /** 系统深浅色（EntryAbility 写入）：源数据颜色按显示模式换算 */
   @StorageProp('isDark') @Watch('onDarkChange') isDark: boolean = false;
-  /** 深浅色切换代数：并入块级 ForEach key。资源色（$r）切换时系统自动刷新，
-   但源数据字符串色（cellBg/Span fontColor）绑定在 ForEach 子树里，key 不变则不重建、颜色停留旧模式 */
-  @State darkRev: number = 0;
   onNavigate: (title: string) => void = (title: string) => {
   };
 
-  onDarkChange(): void {
-    this.darkRev += 1;
+  aboutToAppear(): void {
+    this.rebuildItems();
   }
 
-  /** 页面切换（renderKey 变化）时清空表格过滤状态与行高同步表 */
+  /** 深浅色切换：源数据字符串色绑定需整树重建（$r 资源色系统自动刷新） */
+  onDarkChange(): void {
+    this.rebuildItems();
+  }
+
+  /** 查询开始/结束 → 进度条项插入/移除（紧跟顶部留白之后，index 1） */
+  onAskingChange(): void {
+    if (this.asking) {
+      if (!(this.source.totalCount() > 1 && this.source.getData(1).kind === 'ask')) {
+        this.source.insertAt(1, { kind: 'ask', ti: 0 });
+      }
+    } else if (this.source.totalCount() > 1 && this.source.getData(1).kind === 'ask') {
+      this.source.removeAt(1);
+    }
+  }
+
+  /** 页面切换（renderKey 变化）时清空表格过滤状态与行高同步表并重建渲染项 */
   onRenderKeyChange(): void {
     if (this.tableFilters.size > 0) {
       this.tableFilters = new Map();
@@ -92,16 +242,282 @@ export struct WikiContentView {
     if (this.wideRowH.size > 0) {
       this.wideRowH = new Map();
     }
+    this.rebuildItems();
   }
 
   build() {
-    Column({ space: 0 }) {
-      ForEach(this.nodes, (node: WikiNode, index: number) => {
-        this.renderBlock(node, 'b' + index)
-      }, (node: WikiNode, index: number) => 'k' + this.renderKey + '_' + this.darkRev + '_' + index)
+    List({ scroller: this.scroller === null ? new Scroller() : this.scroller, space: 0 }) {
+      LazyForEach(this.source, (item: RenderItem) => {
+        this.renderItem(item)
+      }, (item: RenderItem) => this.itemKey(item))
+    }
+    .width('100%')
+    .height('100%')
+    .edgeEffect(EdgeEffect.None)
+    .scrollBar(BarState.Auto)
+    // 滚动视口延伸到物理屏幕底部：内容从半透明导航条下方滑过。
+    // 必须挂在 List 本体（挂自定义组件用法上不传导进内部 List）
+    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.BOTTOM])
+  }
+
+  // ---------- 渲染项（LazyForEach 单元） ----------
+
+  private itemKey(item: RenderItem): string {
+    if (item.kind === 'block') {
+      return 'b' + this.itemGen + '_' + item.ti;
+    }
+    if (item.kind === 'thead') {
+      return 'th' + this.itemGen + '_' + item.ti;
+    }
+    if (item.kind === 'trow') {
+      return 'tr' + this.itemGen + '_' + item.ti + '_' + (item.ri ?? 0);
+    }
+    if (item.kind === 'ask') {
+      return 'ask';
+    }
+    return 'p' + (item.padVp ?? 0);
+  }
+
+  @Builder
+  renderItem(item: RenderItem) {
+    if (item.kind === 'pad') {
+      ListItem() {
+        Column() {
+        }
+        .height(item.padVp ?? 0)
+      }
+    } else if (item.kind === 'ask') {
+      ListItem() {
+        this.renderAskBar()
+      }
+    } else if (item.kind === 'thead') {
+      ListItem() {
+        Column() {
+          this.renderSplitHead(item.table as WikiNode, item.ti)
+        }
+        .width('100%')
+        .alignItems(HorizontalAlign.Start)
+        .padding({ left: 14, right: 14 })
+      }
+    } else if (item.kind === 'trow') {
+      ListItem() {
+        Column() {
+          this.renderSplitRow(item.table as WikiNode, item.row as WikiNode,
+            item.first === true, item.last === true)
+        }
+        .width('100%')
+        .alignItems(HorizontalAlign.Start)
+        .padding({ left: 14, right: 14 })
+      }
+    } else {
+      ListItem() {
+        Column() {
+          this.renderBlock(item.block as WikiNode, 'b' + item.ti)
+        }
+        .width('100%')
+        .alignItems(HorizontalAlign.Start)
+        .padding({ left: 14, right: 14 })
+      }
+    }
+  }
+
+  /** 阶段 2 后台查询进度（非阻塞细条，查询期间页面仍可阅读） */
+  @Builder
+  renderAskBar() {
+    Row({ space: 8 }) {
+      if (this.progressTotal > 0) {
+        Progress({ value: this.progressDone, total: this.progressTotal, type: ProgressType.Linear })
+          .layoutWeight(1)
+          .height(4)
+          .color($r('sys.color.brand'))
+          .backgroundColor($r('sys.color.comp_background_secondary'))
+        Text(`${this.progressDone}/${this.progressTotal} 页`)
+          .fontSize(11)
+          .fontColor($r('sys.color.font_tertiary'))
+      } else {
+        LoadingProgress()
+          .width(16)
+          .height(16)
+          .color($r('sys.color.brand'))
+        Text('正在查询…')
+          .fontSize(11)
+          .fontColor($r('sys.color.font_tertiary'))
+      }
+    }
+    .width('100%')
+    .padding({ left: 14, right: 14, top: 2, bottom: 6 })
+  }
+
+  /** 巨型表（>TABLE_SPLIT_MIN_ROWS 行、无 rowspan、非宽表）拆行：整表一个块时任何懒加载都救不了 */
+  private shouldSplitTable(node: WikiNode): boolean {
+    const rows = (node.children ?? []) as WikiNode[];
+    if (rows.length <= TABLE_SPLIT_MIN_ROWS) {
+      return false;
+    }
+    return !this.hasRowSpan(node) && this.wideTableWidthVp(node) === 0;
+  }
+
+  /** 拆分表的可见行（行 0 是表头，常驻 thead；其余按关键词过滤） */
+  private splitVisibleRows(node: WikiNode, tKey: string): TableRowPair[] {
+    const allRows = (node.children ?? []) as WikiNode[];
+    const out: TableRowPair[] = [];
+    const kw = this.tableFilterOf(tKey);
+    if (kw.length === 0) {
+      for (let i = 1; i < allRows.length; i++) {
+        out.push({ row: allRows[i], ri: i });
+      }
+      return out;
+    }
+    const terms = kw.split(/\s+/).filter((s: string) => s.length > 0);
+    for (let i = 1; i < allRows.length; i++) {
+      if (this.rowMatches(allRows[i], terms)) {
+        out.push({ row: allRows[i], ri: i });
+      }
+    }
+    return out;
+  }
+
+  /** nodes → 渲染项列表（首尾安全区留白 + 查询进度条 + 块级 + 巨型表拆行），整体 reload */
+  private rebuildItems(): void {
+    this.itemGen++;
+    const items: RenderItem[] = [{ kind: 'pad', ti: 0, padVp: TOP_PAD_VP }];
+    if (this.asking) {
+      items.push({ kind: 'ask', ti: 0 });
+    }
+    const nodes = this.nodes;
+    for (let i = 0; i < nodes.length; i++) {
+      const n = nodes[i];
+      if (n.type === NodeType.Table && this.shouldSplitTable(n)) {
+        items.push({ kind: 'thead', ti: i, table: n });
+        const vis = this.splitVisibleRows(n, 'sp' + i);
+        for (let k = 0; k < vis.length; k++) {
+          items.push({
+            kind: 'trow', ti: i, table: n, row: vis[k].row, ri: vis[k].ri,
+            first: k === 0, last: k === vis.length - 1,
+          });
+        }
+      } else {
+        items.push({ kind: 'block', ti: i, block: n });
+      }
+    }
+    items.push({ kind: 'pad', ti: 0, padVp: BOTTOM_PAD_VP });
+    this.source.reload(items);
+  }
+
+  /** 拆分表过滤词变化 → 区间替换行渲染项（thead 不动，搜索框焦点不丢） */
+  private refreshSplitRows(ti: number): void {
+    const head = this.source.headIndex(ti);
+    if (head < 0) {
+      return;
+    }
+    const node = this.nodes[ti];
+    const vis = this.splitVisibleRows(node, 'sp' + ti);
+    const newItems: RenderItem[] = [];
+    for (let k = 0; k < vis.length; k++) {
+      newItems.push({
+        kind: 'trow', ti: ti, table: node, row: vis[k].row, ri: vis[k].ri,
+        first: k === 0, last: k === vis.length - 1,
+      });
+    }
+    this.source.replaceRange(head + 1, this.source.rowCountAfter(ti), newItems);
+  }
+
+  @Builder
+  renderSplitHead(node: WikiNode, ti: number) {
+    // caption + 搜索框在表格外（与整表路径一致）；边框只包行区域（表头行起）。
+    // 过滤命中 0 行时表头行自闭合底边框
+    Column() {
+      if (node.caption !== undefined && (node.caption as WikiNode[]).length > 0) {
+        Text() {
+          this.renderSpans(node.caption as WikiNode[])
+        }
+        .fontSize(13)
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.text_secondary'))
+        .margin({ top: 6, bottom: 2 })
+      }
+      if (this.tableFilterable(node)) {
+        Row({ space: 8 }) {
+          TextInput({ placeholder: '搜索表格内容…', text: this.tableFilters.get('sp' + ti) ?? '' })
+            .layoutWeight(1)
+            .height(38)
+            .fontSize(14)
+            .padding({ left: 12, right: 12 })
+            .backgroundColor($r('app.color.surface'))
+            .borderRadius(10)
+            .onChange((v: string) => {
+              this.setTableFilter('sp' + ti, v);
+            })
+          if (this.tableFilterOf('sp' + ti).length > 0) {
+            Text((this.splitVisibleRows(node, 'sp' + ti).length) + '/' +
+              (((node.children ?? []) as WikiNode[]).length - 1))
+              .fontSize(12)
+              .fontColor($r('app.color.text_tertiary'))
+            Text('✕')
+              .fontSize(14)
+              .fontColor($r('app.color.text_tertiary'))
+              .padding(6)
+              .onClick(() => {
+                this.clearTableFilter('sp' + ti);
+              })
+          }
+        }
+        .width('100%')
+        .margin({ top: 8, bottom: 4 })
+      }
+      // 行 0 = 表头行
+      if (((node.children ?? []) as WikiNode[]).length > 0) {
+        Column() {
+          this.renderTableRow(node, ((node.children ?? []) as WikiNode[])[0])
+        }
+        .width('100%')
+        .border({
+          width: this.splitVisibleRows(node, 'sp' + ti).length === 0 ?
+          { left: 1, right: 1, top: 1, bottom: 1 } : { left: 1, right: 1, top: 1, bottom: 0 },
+          color: $r('app.color.table_border_outer')
+        })
+        .borderRadius({
+          topLeft: 4, topRight: 4,
+          bottomLeft: this.splitVisibleRows(node, 'sp' + ti).length === 0 ? 4 : 0,
+          bottomRight: this.splitVisibleRows(node, 'sp' + ti).length === 0 ? 4 : 0
+        })
+        .margin({ top: 8 })
+      }
     }
     .width('100%')
     .alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder
+  renderSplitRow(node: WikiNode, row: WikiNode, first: boolean, last: boolean) {
+    Column() {
+      this.renderTableRow(node, row)
+    }
+    .width('100%')
+    .border({
+      width: { left: 1, right: 1, top: 0, bottom: last ? 1 : 0 },
+      color: $r('app.color.table_border_outer')
+    })
+    .borderRadius({ bottomLeft: last ? 4 : 0, bottomRight: last ? 4 : 0 })
+    .margin({ bottom: last ? 8 : 0 })
+  }
+
+  /** 普通表行渲染（整表路径与拆分行路径共用；列宽按表头声明比例） */
+  @Builder
+  renderTableRow(node: WikiNode, row: WikiNode) {
+    Flex({ direction: FlexDirection.Row, alignItems: ItemAlign.Stretch }) {
+      ForEach(row.children ?? [], (cell: WikiNode, cIdx: number) => {
+        Column() {
+          this.renderInlineFlow(cell.inline ?? [], '')
+        }
+        .layoutWeight(this.colWeight(node, cell))
+        .padding(6)
+        .backgroundColor(this.cellBg(cell))
+        .border({ width: 1, color: $r('app.color.table_border') })
+        .alignItems(HorizontalAlign.Start)
+      }, (cell: WikiNode, cIdx: number) => 'cell' + (cell.colIndex ?? 0))
+    }
+    .width('100%')
   }
 
   // ---------- 表格搜索过滤 ----------
@@ -114,6 +530,10 @@ export struct WikiContentView {
     const m = new Map(this.tableFilters);
     m.set(key, v);
     this.tableFilters = m;
+    // 拆分表的行是独立渲染项，需区间替换；整表的行由其内部 ForEach 自行刷新
+    if (key.startsWith('sp')) {
+      this.refreshSplitRows(parseInt(key.substring(2), 10));
+    }
   }
 
   private tableFilterOf(key: string): string {
@@ -127,6 +547,9 @@ export struct WikiContentView {
     const m = new Map(this.tableFilters);
     m.set(key, '');
     this.tableFilters = m;
+    if (key.startsWith('sp')) {
+      this.refreshSplitRows(parseInt(key.substring(2), 10));
+    }
   }
 
   /** 递归收集节点全部文本（含链接目标/文件名），用于行过滤匹配 */
@@ -562,20 +985,7 @@ export struct WikiContentView {
       } else {
         Column() {
           ForEach(this.visibleRows(node, tKey), (item: TableRowPair, vIdx: number) => {
-            // Stretch：同行单元格拉伸到最高格的高度，保持行内等高（对齐 HTML 表格行为）
-            Flex({ direction: FlexDirection.Row, alignItems: ItemAlign.Stretch }) {
-              ForEach(item.row.children ?? [], (cell: WikiNode, cIdx: number) => {
-                Column() {
-                  this.renderInlineFlow(cell.inline ?? [], '')
-                }
-                .layoutWeight(this.colWeight(node, cell))
-                .padding(6)
-                .backgroundColor(this.cellBg(cell))
-                .border({ width: 1, color: $r('app.color.table_border') })
-                .alignItems(HorizontalAlign.Start)
-              }, (cell: WikiNode, cIdx: number) => 'cell' + item.ri + '_' + cIdx)
-            }
-            .width('100%')
+            this.renderTableRow(node, item.row)
           }, (item: TableRowPair, vIdx: number) => 'frow_' + item.ri)
         }
         .border({ width: 1, color: $r('app.color.table_border_outer') })
