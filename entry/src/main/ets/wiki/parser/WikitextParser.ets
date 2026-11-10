@@ -3,6 +3,7 @@ import { WikiIndex } from '../../data/WikiIndex';
 import { NodeType, WikiNode, MapMarker } from '../../model/WikiTypes';
 import { BraceUtil } from './BraceUtil';
 import { PLACEHOLDER_MARK } from '../template/TemplateEngine';
+import { RefCollector } from './RefCollector';
 
 const TAG = 'WikitextParser';
 
@@ -21,6 +22,19 @@ interface ParsedBlock {
   nextIndex: number;
   /** 与 node 同级的后续块（如闭合标签之后同一行的余量解析结果） */
   siblings?: WikiNode[];
+}
+
+/** raw HTML 表格行切分的中间结构 */
+interface HtmlRowSpan {
+  start: number;
+  end: number;
+  openTag: string;
+}
+
+/** raw HTML 单元格开标签上下文 */
+interface HtmlCellOpen {
+  header: boolean;
+  attrs: string;
 }
 
 /** 混合文本切分出的顶层块级 HTML 片段 */
@@ -55,6 +69,10 @@ export class WikitextParser {
   private currentTitle: string;
   /** 无 id 的 mw-collapsible 容器自动编号 */
   private collapsibleSeq: number = 0;
+  /** Cite 脚注收集（单页生命周期；RefMark/ReferencesBlock 渲染用） */
+  private refs: RefCollector = new RefCollector();
+  /** 是否已出现 <references> 块（决定 parse 末尾是否自动追加） */
+  private hasReferencesBlock: boolean = false;
 
   constructor(index: WikiIndex | null, currentTitle: string) {
     this.index = index;
@@ -63,9 +81,27 @@ export class WikitextParser {
 
   parse(text: string): WikiNode[] {
     // 去掉行为开关
-    const cleaned = text.replace(/__[A-Z_]+__/g, '');
+    let cleaned = text.replace(/__[A-Z_]+__/g, '');
+    // 手工语言转换标记 -{zh-cn:简;zh-tw:繁;}-：取 zh-cn 分支（无分支语法则保内容去标记）
+    cleaned = cleaned.replace(/-\{([^{}]+)\}-/g, (full: string, body: string): string => {
+      const zhcn = body.match(/zh-cn\s*:\s*([^;}]*)/i) ?? body.match(/zh-hans\s*:\s*([^;}]*)/i);
+      if (zhcn !== null) {
+        return zhcn[1];
+      }
+      if (body.indexOf(':') < 0 && body.indexOf(';') < 0) {
+        return body;
+      }
+      const first = body.match(/^[a-z-]+\s*:\s*([^;}]*)/i);
+      return first !== null ? first[1] : '';
+    });
     const lines = cleaned.split('\n');
-    return this.parseBlocks(lines, 0, lines.length);
+    const nodes = this.parseBlocks(lines, 0, lines.length);
+    // 有脚注但页面无 <references> 块 → 末尾自动追加（Cite 语义，防参考丢失）
+    if (this.refs.entries.length > 0 && !this.hasReferencesBlock) {
+      const refsNode: WikiNode = { type: NodeType.ReferencesBlock, refEntries: this.refs.entries };
+      nodes.push(refsNode);
+    }
+    return nodes;
   }
 
   private isBlank(line: string): boolean {
@@ -173,6 +209,25 @@ export class WikitextParser {
           out.push(tbl.node);
         }
         i = tbl.nextIndex;
+        continue;
+      }
+      // Cite 参考文献列表块（<references /> / <references>…</references>）
+      if (trimmed.startsWith('<references')) {
+        flush();
+        this.hasReferencesBlock = true;
+        const refsNode: WikiNode = { type: NodeType.ReferencesBlock, refEntries: this.refs.entries };
+        out.push(refsNode);
+        // 跳过标签本身；闭合标签在后续行时一并跳过（条目内容不在此处解析）
+        let j = i + 1;
+        if (trimmed.toLowerCase().indexOf('</references>') < 0) {
+          while (j < end && lines[j].toLowerCase().indexOf('</references>') < 0) {
+            j++;
+          }
+          if (j < end) {
+            j++;
+          }
+        }
+        i = j;
         continue;
       }
       // 标题
@@ -433,6 +488,9 @@ export class WikitextParser {
       }
     } else if (lower.startsWith('<gallery')) {
       return this.parseGallery(lines, start, end);
+    } else if (lower.startsWith('<table')) {
+      // raw HTML 表格（模板产出）
+      return this.parseHtmlTableBlock(lines, start);
     } else if (lower.startsWith('<ol') || lower.startsWith('<ul')) {
       return this.parseHtmlList(lines, start, end);
     } else if (lower.startsWith('<imagemap')) {
@@ -872,6 +930,10 @@ export class WikitextParser {
     let currentRow: WikiNode | null = null;
     let rowAttrs = '';
     let i = start + 1;
+    // 表级属性（{| class="wikitable sortable" style="..."）：wikitable 等样式 + sortable 排序标记
+    const tableAttrLine = lines[start].replace(/^\s*\{\|/, '');
+    const tableClass = this.classAttrOf(tableAttrLine);
+    const tableBg = this.bgColorOf(tableAttrLine);
     // rowspan 占位跟踪：行号 -> 该行被上方 rowspan 占用的列集合
     const rowspanOcc: Map<number, Set<number>> = new Map();
     let rowIndex = 0;
@@ -933,6 +995,51 @@ export class WikitextParser {
         i++;
         continue;
       }
+      // 混排 HTML 行（模板在 {| 表内产出 <tr><td>…）：按 HTML 行解析并入当前 wikitext 表
+      if (t.startsWith('<tr')) {
+        pushRow();
+        let html = raw;
+        let j = i;
+        while (j < lines.length && html.toLowerCase().indexOf('</tr>') < 0) {
+          j++;
+          if (j < lines.length) {
+            html += ' ' + lines[j].trim();
+          }
+        }
+        const rowNode = this.parseHtmlTableRow(html);
+        if (rowNode !== null) {
+          const cells = rowNode.children as WikiNode[];
+          for (const cell of cells) {
+            placeCell(cell);
+          }
+          currentRow = rowNode;
+          rowAttrs = '';
+        }
+        i = j + 1;
+        continue;
+      }
+      // 嵌套 wikitext 表（{| 表中表，单元格内另起 {|）：递归解析挂到所在单元格 children
+      if (t.startsWith('{|')) {
+        if (currentRow === null) {
+          currentRow = { type: NodeType.TableRow, children: [] };
+        }
+        const cells = currentRow.children as WikiNode[];
+        let hostCell: WikiNode | undefined = cells.length > 0 ? cells[cells.length - 1] : undefined;
+        if (hostCell === undefined) {
+          hostCell = { type: NodeType.TableCell, inline: [] };
+          placeCell(hostCell);
+          cells.push(hostCell);
+        }
+        const nested = this.parseTable(lines, i);
+        if (nested.node !== null) {
+          if (hostCell.children === undefined) {
+            hostCell.children = [];
+          }
+          (hostCell.children as WikiNode[]).push(nested.node);
+        }
+        i = nested.nextIndex;
+        continue;
+      }
       if (t.startsWith('|') || t.startsWith('!')) {
         if (currentRow === null) {
           currentRow = { type: NodeType.TableRow, children: [] };
@@ -943,6 +1050,11 @@ export class WikitextParser {
         }
         const isHeader = t.charAt(0) === '!';
         let seg = t.substring(1);
+        // 行首双竖线/双叹号（||colspan=…|，模板 {{!}}{{!}} 产出）：
+        // MediaWiki 语义 = 空首格 + 带属性续格——再剥一个分隔符，否则属性被当正文泄漏
+        if (seg.startsWith('|') || (isHeader && seg.startsWith('!'))) {
+          seg = seg.substring(1);
+        }
         if (isHeader) {
           // 头部单元格按 '!!' 拆分
           const parts = this.splitDouble(seg, '!');
@@ -995,7 +1107,203 @@ export class WikitextParser {
     if (caption !== null) {
       node.caption = caption;
     }
+    if (tableClass !== null) {
+      node.htmlClass = tableClass;
+      if (/\bsortable\b/i.test(tableClass)) {
+        node.sortable = true;
+      }
+    }
+    if (tableBg !== null) {
+      node.bgColor = tableBg;
+    }
     return { node: node, nextIndex: i };
+  }
+
+  /** class="..." 属性值提取；无 class 返回 null */
+  private classAttrOf(attrs: string): string | null {
+    const m = attrs.match(/class\s*=\s*"([^"]*)"/i) ?? attrs.match(/class\s*=\s*'([^']*)'/i);
+    return m !== null ? m[1] : null;
+  }
+
+  /** 背景色提取（bgcolor= / background:#xxx / background-color:#xxx）；无返回 null */
+  private bgColorOf(attrs: string): string | null {
+    let m = attrs.match(/bgcolor\s*=\s*["']?([#\w()][^"'\s>]*)/i);
+    if (m === null) {
+      m = attrs.match(/background(?:-color)?\s*:\s*(#[0-9a-fA-F]{3,8}|\w+\([^)]*\))/);
+    }
+    return m !== null ? m[1] : null;
+  }
+
+  /** 单条 <tr>…</tr> HTML（模板产出）→ TableRow 节点 */
+  private parseHtmlTableRow(html: string): WikiNode | null {
+    const trOpen = html.match(/<tr[^>]*>/i);
+    if (trOpen === null) {
+      return null;
+    }
+    const closeIdx = html.toLowerCase().indexOf('</tr>');
+    const inner = closeIdx >= 0 ? html.substring(trOpen.index! + trOpen[0].length, closeIdx) : html;
+    const cells = this.htmlCells(inner);
+    if (cells.length === 0) {
+      return null;
+    }
+    const row: WikiNode = { type: NodeType.TableRow, children: cells };
+    const rowBg = this.bgColorOf(trOpen[0]);
+    if (rowBg !== null) {
+      row.bgColor = rowBg;
+    }
+    return row;
+  }
+
+  /** 块级 raw HTML 表格：<table …>…</table>（Squote/Qualityprice/Infobox 等模板产出）。
+   *  多行收集到深度配平的 </table>；行/格切分用 htmlCells 状态机。 */
+  private parseHtmlTableBlock(lines: string[], start: number): ParsedBlock {
+    let html = lines[start].trim();
+    let i = start + 1;
+    while (i < lines.length) {
+      const opens = (html.match(/<table\b/gi) ?? []).length;
+      const closes = (html.match(/<\/table\s*>/gi) ?? []).length;
+      if (opens > 0 && closes >= opens) {
+        break;
+      }
+      html += ' ' + lines[i].trim();
+      i++;
+      if (i - start > 500) {
+        break; // 防御：异常超大块
+      }
+    }
+    const node = this.parseHtmlTableStr(html);
+    return { node: node, nextIndex: i };
+  }
+
+  /** 单字符串 raw HTML 表格 → Table 节点 */
+  private parseHtmlTableStr(html: string): WikiNode | null {
+    const open = html.match(/<table[^>]*>/i);
+    if (open === null) {
+      return null;
+    }
+    const lower = html.toLowerCase();
+    const tableEnd = lower.lastIndexOf('</table>');
+    const inner = tableEnd >= 0 ? html.substring(open.index! + open[0].length, tableEnd) : html;
+    // 行切分：顶层 <tr …>…</tr>（嵌套表内的 <tr> 属于子表，交给递归处理）
+    const rows: WikiNode[] = [];
+    const trRe = /<tr\b[^>]*>/gi;
+    let m: RegExpExecArray | null;
+    const rowSpans: HtmlRowSpan[] = [];
+    while ((m = trRe.exec(inner)) !== null) {
+      const rowStart = m.index! + m[0].length;
+      const close = inner.toLowerCase().indexOf('</tr>', rowStart);
+      const rowEnd = close >= 0 ? close : inner.length;
+      rowSpans.push({ start: rowStart, end: rowEnd, openTag: m[0] });
+      trRe.lastIndex = close >= 0 ? close + 5 : inner.length;
+    }
+    for (const rs of rowSpans) {
+      const cells = this.htmlCells(inner.substring(rs.start, rs.end));
+      if (cells.length > 0) {
+        // 列位置顺序累计（colSpan 占多列；raw HTML 路径无 rowspan 占位跟踪，近似即可）
+        let col = 0;
+        for (const cell of cells) {
+          cell.colIndex = col;
+          col += cell.colSpan ?? 1;
+        }
+        const row: WikiNode = { type: NodeType.TableRow, children: cells };
+        const rowBg = this.bgColorOf(rs.openTag);
+        if (rowBg !== null) {
+          row.bgColor = rowBg;
+        }
+        rows.push(row);
+      }
+    }
+    const node: WikiNode = { type: NodeType.Table, children: rows };
+    const cls = this.classAttrOf(open[0]);
+    if (cls !== null) {
+      node.htmlClass = cls;
+      if (/\bsortable\b/i.test(cls)) {
+        node.sortable = true;
+      }
+    }
+    const bg = this.bgColorOf(open[0]);
+    if (bg !== null) {
+      node.bgColor = bg;
+    }
+    return rows.length > 0 ? node : null;
+  }
+
+  /** HTML 单元格状态机：<td>/<th>（可无闭合）→ TableCell/TableHeaderCell 节点。
+   *  内容经 parseInline 处理（内含 [[链接]]/<br>/<span> 等 wikitext 混排）；
+   *  display:none 的 span 整段跳过但提取 data-sort-value 为排序键。 */
+  private htmlCells(content: string): WikiNode[] {
+    const cells: WikiNode[] = [];
+    const tagRe = /<(\/?)(td|th)\b[^>]*>/gi;
+    let m: RegExpExecArray | null;
+    let cur: HtmlCellOpen | null = null;
+    let curStart = 0;
+    while ((m = tagRe.exec(content)) !== null) {
+      const closing = m[1] === '/';
+      const header = m[2].toLowerCase() === 'th';
+      if (!closing) {
+        if (cur !== null) {
+          this.pushHtmlCell(cells, cur, content.substring(curStart, m.index!), false);
+        }
+        cur = { header: header, attrs: m[0] };
+        curStart = m.index! + m[0].length;
+      } else if (cur !== null) {
+        this.pushHtmlCell(cells, cur, content.substring(curStart, m.index!), true);
+        cur = null;
+      }
+    }
+    if (cur !== null) {
+      this.pushHtmlCell(cells, cur, content.substring(curStart), false);
+    }
+    return cells;
+  }
+
+  private pushHtmlCell(cells: WikiNode[], cur: HtmlCellOpen,
+    rawContent: string, closed: boolean): void {
+    let content = rawContent;
+    // 嵌套子表：递归解析为子 Table 节点（少见，如信息盒内小表）
+    const nested = content.match(/<table\b[^>]*>[\s\S]*<\/table\s*>/i);
+    let nestedNode: WikiNode | null = null;
+    if (nested !== null) {
+      nestedNode = this.parseHtmlTableStr(nested[0]);
+      content = content.replace(nested[0], '');
+    }
+    // display:none 的 span：内容丢弃，data-sort-value 提取为排序键
+    let sortValue: string | undefined;
+    content = content.replace(/<span\b[^>]*display\s*:\s*none[^>]*>([\s\S]*?)<\/span>/gi,
+      (_full: string, innerSpan: string): string => {
+        const sv = _full.match(/data-sort-value\s*=\s*"([^"]*)"/i);
+        if (sv !== null) {
+          sortValue = sv[1];
+        }
+        return '';
+      });
+    const attrs = cur.attrs;
+    const cs = attrs.match(/colspan\s*=\s*["']?(\d+)/i);
+    const rs = attrs.match(/rowspan\s*=\s*["']?(\d+)/i);
+    const am = attrs.match(/text-align\s*:\s*(center|left|right)/i) ??
+      attrs.match(/align\s*=\s*["']?(center|left|right)/i);
+    const sv2 = attrs.match(/data-sort-value\s*=\s*"([^"]*)"/i);
+    if (sv2 !== null && sortValue === undefined) {
+      sortValue = sv2[1];
+    }
+    const cell: WikiNode = {
+      type: cur.header ? NodeType.TableHeaderCell : NodeType.TableCell,
+      inline: this.parseInline(content.trim()),
+      colSpan: cs !== null && parseInt(cs[1]) > 1 ? parseInt(cs[1]) : undefined,
+      rowSpan: rs !== null && parseInt(rs[1]) > 1 ? parseInt(rs[1]) : undefined,
+      align: am !== null ? am[1] : undefined,
+    };
+    const bg = this.bgColorOf(attrs);
+    if (bg !== null) {
+      cell.bgColor = bg;
+    }
+    if (sortValue !== undefined) {
+      cell.sortValue = sortValue;
+    }
+    if (nestedNode !== null) {
+      cell.children = [nestedNode];
+    }
+    cells.push(cell);
   }
 
   /** 按 '||' / '!!' 拆分（顶层，忽略嵌套结构） */
@@ -1042,6 +1350,7 @@ export class WikitextParser {
     let rowSpan = 1;
     let align = '';
     let widthPct = 0;
+    let bgColor: string | undefined;
     // 属性部分：| attrs | content
     const pi = this.topLevelIndexOf(content, '|');
     if (pi >= 0) {
@@ -1073,6 +1382,11 @@ export class WikitextParser {
         } else if (wm[0].indexOf('%') >= 0) {
           widthPct = parseFloat(wm[1]);
         }
+        // 单元格背景色（wikitext 路径此前漏提取——钓鱼时间轴色条格全靠它）
+        const bg = this.bgColorOf(attrs);
+        if (bg !== null) {
+          bgColor = bg;
+        }
       }
     }
     const node: WikiNode = {
@@ -1081,7 +1395,23 @@ export class WikitextParser {
       colSpan: colSpan > 1 ? colSpan : undefined,
       rowSpan: rowSpan > 1 ? rowSpan : undefined,
       align: align.length > 0 ? align : undefined,
+      bgColor: bgColor,
     };
+    // 隐藏排序键（<span style="display:none">data-sort-value="X"</span>，站点 sortable 惯例）：
+    // 从可见内容中剥除，取值挂到单元格做排序键（display:none span 由 parseInline 跳过，
+    // 但其文本形态是排序键本身，须先于解析提取）
+    const svm = content.match(/<span[^>]*display\s*:\s*none[^>]*>\s*data-sort-value\s*=\s*"([^"]*)"\s*<\/span>/i);
+    if (svm !== null) {
+      node.sortValue = svm[1];
+    }
+    // 单元格内嵌 raw HTML 表（如价格多品质并排小表）：剥离为块级子节点
+    const nestedTable = content.match(/<table\b[^>]*>[\s\S]*?<\/table\s*>/i);
+    if (nestedTable !== null) {
+      const nestedNode = this.parseHtmlTableStr(nestedTable[0]);
+      if (nestedNode !== null) {
+        node.children = [nestedNode];
+      }
+    }
     if (widthPct > 0) {
       node.widthPct = widthPct;
     }
@@ -1143,7 +1473,7 @@ export class WikitextParser {
           const sp = inner.indexOf(' ');
           if (sp > 0) {
             const url = inner.substring(0, sp);
-            const label = inner.substring(sp + 1);
+            const label = this.decodeEntitiesIn(inner.substring(sp + 1));
             out.push({ type: NodeType.ExternalLink, href: url, text: label });
           } else {
             out.push({ type: NodeType.ExternalLink, href: inner, text: inner });
@@ -1245,11 +1575,28 @@ export class WikitextParser {
       out.push(...this.parseInline(display !== null ? display : val));
       return true;
     }
-    // 内部链接
-    const resolved = this.index !== null ? this.index.resolveLink(t, this.currentTitle) : null;
+    // 内部链接（先拆 #fragment：[[版本历史#1.6.15]] 的存在性只看页面名部分）
+    let linkTarget = t;
+    let anchor: string | undefined;
+    const hash = t.indexOf('#');
+    if (hash >= 0) {
+      linkTarget = t.substring(0, hash);
+      anchor = t.substring(hash + 1);
+      if (linkTarget.length === 0) {
+        // [[#节]] = 当前页锚点
+        linkTarget = this.currentTitle;
+      }
+    }
+    const resolved = this.index !== null ? this.index.resolveLink(linkTarget, this.currentTitle) : null;
     const show = display !== null ? display : t;
     if (resolved !== null) {
-      out.push({ type: NodeType.Link, target: resolved, inline: this.parseInline(show) });
+      out.push({ type: NodeType.Link, target: resolved, anchor: anchor, inline: this.parseInline(show) });
+      return true;
+    }
+    // interwiki/语言链接（[[de:X]] 等）：页面不存在且前缀为小写语言代码 → 整链接丢弃
+    // （MediaWiki 核心语义：语言链接移出正文不渲染；必须在 resolveLink 失败之后判断，防误伤站内页）
+    const ic = t.indexOf(':');
+    if (ic > 0 && ic <= 10 && /^[a-z][a-z0-9-]{1,9}:$/.test(t.substring(0, ic + 1))) {
       return true;
     }
     // 解析失败：普通文本
@@ -1364,13 +1711,35 @@ export class WikitextParser {
       }
       return i + 8;
     }
-    // <ref>…</ref> 丢弃
-    if (lower.startsWith('<ref', i)) {
-      const close = lower.indexOf('</ref>', i);
-      if (close >= 0) {
-        return close + 6;
+    // <ref name=x>内容</ref> / <ref name=x/>：Cite 脚注 → RefMark 上标序号
+    if (lower.startsWith('<ref', i) && (text.charAt(i + 4) === '>' || text.charAt(i + 4) === ' ' ||
+      text.charAt(i + 4) === '/')) {
+      const gt = lower.indexOf('>', i);
+      if (gt < 0) {
+        return i + 4;
       }
-      return i;
+      const openTag = text.substring(i, gt + 1);
+      const selfClosing = openTag.endsWith('/>') || openTag.endsWith('/ >');
+      const nm = openTag.match(/name\s*=\s*"([^"]*)"|name\s*=\s*'([^']*)'|name\s*=\s*([^\s"'>]+)/i);
+      const name = nm !== null ? (nm[1] ?? nm[2] ?? nm[3] ?? '').trim() : null;
+      let inner = '';
+      let next = gt + 1;
+      if (!selfClosing) {
+        const close = lower.indexOf('</ref>', gt + 1);
+        if (close >= 0) {
+          inner = text.substring(gt + 1, close);
+          next = close + 6;
+        } else {
+          // 未闭合：内容到行尾按脚注体
+          inner = text.substring(gt + 1);
+          next = text.length;
+        }
+      }
+      const entry = this.refs.register(name, inner, (t: string): WikiNode[] => this.parseInline(t));
+      if (entry !== null) {
+        out.push({ type: NodeType.RefMark, refName: entry.name ?? undefined, refSeq: entry.seq });
+      }
+      return next;
     }
     // Web 嵌入（bilibili iframe 等）：无法离线呈现，显式占位而非静默丢弃
     if (lower.startsWith('<iframe', i) || lower.startsWith('<video', i) ||
@@ -1425,7 +1794,8 @@ export class WikitextParser {
       }
       if (tagName === 'span' || tagName === 'div' || tagName === 'font' || tagName === 'small' ||
         tagName === 'big' || tagName === 'sup' || tagName === 'sub' || tagName === 'u' ||
-        tagName === 's' || tagName === 'center' || tagName === 'abbr') {
+        tagName === 's' || tagName === 'center' || tagName === 'abbr' ||
+        tagName === 'code' || tagName === 'samp' || tagName === 'tt' || tagName === 'kbd') {
         // 折叠开关（MediaWiki mw-customtoggle-X）：包成带 toggleFor 的样式节点，渲染期接点击
         if (!isClose) {
           const tm = full.match(/class\s*=\s*"[^"]*\bmw-customtoggle-([^\s"]+)/i);
@@ -1447,11 +1817,19 @@ export class WikitextParser {
             }
           }
         }
-        // 带样式语义的容器（<font color> / style color / <small><big> 字号）：包成样式节点
+        // 带样式语义的容器（<font color> / style color / <small><big> 字号 / <sup><sub> 上下标 / <code><samp> 等宽）：包成样式节点
         if (!isClose) {
+          // display:none 容器：内容整段跳过（sortable 的隐藏排序键 span 等）
+          if (/display\s*:\s*none/i.test(full)) {
+            const hideClose = '</' + tagName + '>';
+            const hclose = lower.indexOf(hideClose, i);
+            return hclose >= 0 ? hclose + hideClose.length : i + full.length;
+          }
           const color = this.tagColor(full);
           const fontSize = tagName === 'small' ? 10 : (tagName === 'big' ? 18 : 0);
-          if (color !== null || fontSize > 0) {
+          const scriptPos = tagName === 'sup' ? 'sup' : (tagName === 'sub' ? 'sub' : undefined);
+          const mono = tagName === 'code' || tagName === 'samp' || tagName === 'tt' || tagName === 'kbd';
+          if (color !== null || fontSize > 0 || scriptPos !== undefined || mono) {
             const closeTag = '</' + tagName + '>';
             const close = lower.indexOf(closeTag, i);
             if (close >= 0) {
@@ -1464,6 +1842,12 @@ export class WikitextParser {
               }
               if (fontSize > 0) {
                 node.fontSize = fontSize;
+              }
+              if (scriptPos !== undefined) {
+                node.scriptPos = scriptPos;
+              }
+              if (mono) {
+                node.mono = true;
               }
               out.push(node);
               return close + closeTag.length;
@@ -1491,6 +1875,29 @@ export class WikitextParser {
     return null;
   }
 
+  /** 段内全文实体解码（外链显示文本等绕过逐字符扫描的路径） */
+  private decodeEntitiesIn(text: string): string {
+    let out = '';
+    let i = 0;
+    while (i < text.length) {
+      const c = text.charAt(i);
+      if (c === '&') {
+        const semi = text.indexOf(';', i);
+        if (semi >= 0 && semi - i <= 10) {
+          const dec = this.decodeEntity(text.substring(i, semi + 1));
+          if (dec !== null) {
+            out += dec;
+            i = semi + 1;
+            continue;
+          }
+        }
+      }
+      out += c;
+      i++;
+    }
+    return out;
+  }
+
   private decodeEntity(ent: string): string | null {
     switch (ent) {
       case '&amp;': return '&';
@@ -1511,6 +1918,22 @@ export class WikitextParser {
       case '&copy;': return '©';
       case '&reg;': return '®';
       case '&trade;': return '™';
+      case '&ldquo;': return '“';
+      case '&rdquo;': return '”';
+      case '&divide;': return '÷';
+      case '&uarr;': return '↑';
+      case '&darr;': return '↓';
+      case '&larr;': return '←';
+      case '&rarr;': return '→';
+      case '&frasl;': return '⁄';
+      case '&thinsp;': return '\u2009';
+      case '&deg;': return '°';
+      case '&plusmn;': return '±';
+      case '&ne;': return '≠';
+      case '&le;': return '≤';
+      case '&ge;': return '≥';
+      case '&infin;': return '∞';
+      case '&check;': return '✓';
       default: {
         const m = ent.match(/^&#(\d+);$/);
         if (m !== null) {

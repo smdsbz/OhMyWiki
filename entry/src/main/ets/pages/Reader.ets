@@ -280,7 +280,7 @@ export struct Reader {
         }
       }
     };
-    if (this.pageTitle === this.startTitle && this.startTitle === '首页') {
+    if (this.pageTitle === this.startTitle) {
       return [search];
     }
     const home: HdsNavigationMenuItemOptions = {

@@ -14,6 +14,7 @@ import { InvokeHandler } from '../wiki/template/TemplateEngine';
 import { SiteAdapter, SiteAdapterFactory } from '../wiki/siteadapter/SiteAdapter';
 import { RakuenSiteAdapter } from '../wiki/siteadapter/rakuen/RakuenSiteAdapter';
 import { MhxxSiteAdapter } from '../wiki/siteadapter/mhxx/MhxxSiteAdapter';
+import { SdvSiteAdapter } from '../wiki/siteadapter/sdv/SdvSiteAdapter';
 
 const TAG = 'AppStore';
 
@@ -39,6 +40,7 @@ export class AppStore {
     // 站点适配包挂载点：新站点在此注册（引擎不 import 任何具体适配器）
     SiteAdapterFactory.register(new RakuenSiteAdapter());
     SiteAdapterFactory.register(new MhxxSiteAdapter());
+    SiteAdapterFactory.register(new SdvSiteAdapter());
     AppStore.sources = [];
     AppStore.sources.push(new PublicDirSource(context));
     AppStore.propStore = new PropsCacheStore(context.cacheDir + '/smwc');

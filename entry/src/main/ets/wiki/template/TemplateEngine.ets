@@ -78,6 +78,8 @@ export class TemplateEngine {
   private static askSeq = 0;
   /** 当前展开中的模板实参帧栈（单层即可：#invoke 只回溯最近一层模板实参） */
   private frame: TemplateFrame | null = null;
+  /** #arraydefine 定义的数组（Arrays 扩展子集；单页展开生命周期） */
+  private ctxArrays: Map<string, string[]> = new Map();
 
   constructor(ctx: TemplateContext) {
     this.ctx = ctx;
@@ -133,10 +135,21 @@ export class TemplateEngine {
             continue;
           }
         }
-        // 保护块（nowiki/pre 等）原样保留
+        // 保护块（nowiki/pre 等）原样保留；<ref> 例外——脚注体内的
+        // {{模板}}/[[链接]] 必须展开（Cite 语义），标签本体重组保留
         const tagEnd = BraceUtil.skipXmlBlock(text, i);
         if (tagEnd > i) {
-          sb.push(text.substring(i, tagEnd));
+          const block = text.substring(i, tagEnd);
+          const refOpen = block.match(/^<ref\b[^>]*>/i);
+          if (refOpen !== null) {
+            const refClose = block.toLowerCase().lastIndexOf('</ref>');
+            const refInner = refClose >= 0
+              ? block.substring(refOpen[0].length, refClose) : block.substring(refOpen[0].length);
+            const expanded = await this.expandInner(refInner, depth, stack, inFnArg);
+            sb.push(refOpen[0] + expanded + (refClose >= 0 ? '</ref>' : ''));
+          } else {
+            sb.push(block);
+          }
           i = tagEnd;
           continue;
         }
@@ -289,9 +302,9 @@ export class TemplateEngine {
     if (name.startsWith('#')) {
       return await this.parserFunction(name, rest, depth, stack, inFnArg);
     }
-    // 主命名空间转页 {{:Page}}
+    // 主命名空间转页 {{:Page}}（全页转录）
     if (name.startsWith(':')) {
-      return '';
+      return await this.transcludePage(name.substring(1), depth, stack, undefined, false);
     }
     // 魔术字
     const magic = this.magicWord(name, rest);
@@ -340,12 +353,13 @@ export class TemplateEngine {
     const args = BraceUtil.splitTopLevel(rest, '|');
     const fname = name.toLowerCase();
     if (fname === '#if') {
-      const test = this.get(args, 0);
+      // MediaWiki 语义：实参先展开再判真值（{{#if:{{lc:…}}}} 展开为空 → else 分支）
+      const test = await this.expandInner(this.get(args, 0), depth + 1, stack, true);
       return await this.expandInner(test.trim().length > 0 ? this.get(args, 1) : this.get(args, 2), depth + 1, stack, true);
     }
     if (fname === '#ifeq') {
-      const a = this.get(args, 0).trim();
-      const b = this.get(args, 1).trim();
+      const a = (await this.expandInner(this.get(args, 0), depth + 1, stack, true)).trim();
+      const b = (await this.expandInner(this.get(args, 1), depth + 1, stack, true)).trim();
       return await this.expandInner(a === b ? this.get(args, 2) : this.get(args, 3), depth + 1, stack, true);
     }
     if (fname === '#ifexist') {
@@ -355,26 +369,48 @@ export class TemplateEngine {
       return await this.expandInner(exists ? this.get(args, 1) : this.get(args, 2), depth + 1, stack, true);
     }
     if (fname === '#iferror') {
-      return await this.expandInner(this.get(args, 2), depth + 1, stack, true);
+      // 展开 test 后按 MediaWiki 语义检测错误标记；本引擎求值失败产出空串而非 error class，
+      //  空串按「非错误」走 else 分支（与多数调用点「兜底默认值」用法一致）
+      const test = await this.expandInner(this.get(args, 0), depth + 1, stack, true);
+      const hasErr = test.includes('class="error"') || test.includes('{{#');
+      return await this.expandInner(hasErr ? this.get(args, 1) : this.get(args, 2), depth + 1, stack, true);
+    }
+    if (fname === '#ifexpr') {
+      const expr = await this.expandInner(this.get(args, 0), depth + 1, stack, true);
+      const s = expr.replace(/\s+/g, '');
+      const v = s.length > 0 ? this.evalExprValue(s) : NaN;
+      const truthy = !isNaN(v) && v !== 0;
+      return await this.expandInner(truthy ? this.get(args, 1) : this.get(args, 2), depth + 1, stack, true);
     }
     if (fname === '#switch') {
-      const value = this.get(args, 0).trim();
+      // 值与键都先展开再比较（MediaWiki 语义；{{#switch:{{lc:Fall}}|fall=秋季}} 此前不展开永不命中）
+      const value = (await this.expandInner(this.get(args, 0), depth + 1, stack, true)).trim();
       let def = '';
+      let matched = false;
       for (let i = 1; i < args.length; i++) {
         const seg = args[i];
         const eq = this.topLevelIndexOf(seg, '=');
         if (eq < 0) {
+          // 尾段裸值 = 默认结果；中间裸值 = fall-through 候选（命中后取下一个带 = 段）
+          if (i === args.length - 1) {
+            def = seg;
+          } else if ((await this.expandInner(seg, depth + 1, stack, true)).trim() === value) {
+            matched = true;
+          }
           continue;
         }
-        const key = seg.substring(0, eq).trim();
+        const key = (await this.expandInner(seg.substring(0, eq), depth + 1, stack, true)).trim();
         const val = seg.substring(eq + 1);
         if (key === '#default') {
           def = val;
-        } else if (key === value) {
-          return await this.expandInner(val, depth + 1, stack, true);
+        } else if (key === value || matched) {
+          // MediaWiki 语义：switch 分支结果去首尾空白——多行 case 源码的分支值带
+          //  尾随换行，不 trim 会把 {|-开表行 / !-表头行从属性中间劈成两行（属性泄漏）
+          return (await this.expandInner(val, depth + 1, stack, true)).trim();
         }
       }
-      return await this.expandInner(def, depth + 1, stack, true);
+      const defOut = (await this.expandInner(def, depth + 1, stack, true)).trim();
+      return defOut;
     }
     if (fname === '#expr') {
       // 先展开参数中的嵌套调用（如 {{#expr:{{#show:...}}*2}}），再求值
@@ -394,6 +430,97 @@ export class TemplateEngine {
         out = out.slice(from - 1);
       }
       return out.join('/');
+    }
+    if (fname === '#pos' || fname === '#sub' || fname === '#replace' ||
+      fname === '#explode' || fname === '#len') {
+      // StringFunctions（同步展开实参）
+      const a0 = await this.expandInner(this.get(args, 0), depth + 1, stack, true);
+      const a1 = await this.expandInner(this.get(args, 1), depth + 1, stack, true);
+      const a2 = await this.expandInner(this.get(args, 2), depth + 1, stack, true);
+      if (fname === '#pos') {
+        const off = a2.length > 0 ? parseInt(a2) : 0;
+        const at = a0.indexOf(a1, isNaN(off) || off < 0 ? 0 : off);
+        return at >= 0 ? String(at) : '';
+      }
+      if (fname === '#sub') {
+        let start = parseInt(a1);
+        let len = a2.length > 0 ? parseInt(a2) : NaN;
+        if (isNaN(start)) {
+          return a0;
+        }
+        if (start < 0) {
+          start = Math.max(0, a0.length + start);
+        }
+        if (isNaN(len)) {
+          return a0.substring(start);
+        }
+        if (len < 0) {
+          len = a0.length + len - start;
+        }
+        return a0.substring(start, start + len);
+      }
+      if (fname === '#replace') {
+        return a1.length > 0 ? a0.split(a1).join(a2) : a0;
+      }
+      if (fname === '#explode') {
+        if (a1.length === 0) {
+          return a0;
+        }
+        const parts = a0.split(a1);
+        let n = parseInt(a2.length > 0 ? a2 : '0');
+        if (isNaN(n)) {
+          n = 0;
+        }
+        if (n < 0) {
+          n = parts.length + n;
+        }
+        return n >= 0 && n < parts.length ? parts[n] : '';
+      }
+      return String(a0.length); // #len
+    }
+    if (fname === '#arraydefine' || fname === '#arrayindex') {
+      // Arrays 扩展子集（仅 dump 实际用到的两个函数）
+      const key = this.get(args, 0).trim();
+      if (fname === '#arraydefine') {
+        const vals = await this.expandInner(this.get(args, 1), depth + 1, stack, true);
+        const delim = args.length > 2 && this.get(args, 2).trim().length > 0
+          ? this.get(args, 2).trim() : ',';
+        const list = vals.length === 0 ? [] : vals.split(delim);
+        this.ctxArrays.set(key, list);
+        return '';
+      }
+      const arr = this.ctxArrays.get(key);
+      if (arr === undefined) {
+        return await this.expandInner(this.get(args, 2), depth + 1, stack, true);
+      }
+      let idx = parseInt((await this.expandInner(this.get(args, 1), depth + 1, stack, true)).trim());
+      if (isNaN(idx)) {
+        idx = 1;
+      }
+      // Lua 1-based / PHP Arrays 扩展 1-based 索引，支持负数倒数
+      const i = idx < 0 ? arr.length + idx + 1 : idx;
+      return i >= 1 && i <= arr.length ? arr[i - 1] : '';
+    }
+    if (fname === '#tag') {
+      // {{#tag:tagname|content|attrs...}}：按标签类型分派
+      const tag = this.get(args, 0).trim().toLowerCase();
+      const content = await this.expandInner(this.get(args, 1), depth + 1, stack, true);
+      if (tag === 'templatestyles' || tag === 'seo' || tag === 'syntaxhighlight' ||
+        tag === 'source' || tag === 'pre') {
+        return '';
+      }
+      if (tag === 'nowiki') {
+        return content;
+      }
+      // ref/references/gallery 等交回解析层（原样重建标签让 Parser 机制处理）
+      return '<' + tag + '>' + content + '</' + tag + '>';
+    }
+    if (fname === '#lst' || fname === '#lsth') {
+      // LabeledSectionTransclusion：#lst:页|标签（<section begin=end>）、#lsth:页|标题（按章节标题）
+      const title = (await this.expandInner(this.get(args, 0), depth + 1, stack, true)).trim();
+      const second = (await this.expandInner(this.get(args, 1), depth + 1, stack, true)).trim();
+      const mode: 'label' | 'heading' = fname === '#lst' ? 'label' : 'heading';
+      return await this.transcludePage(title, depth, stack, second.length > 0 ? second : undefined, mode === 'heading');
     }
     if (fname === '#invoke') {
       const module = this.get(args, 0).trim();
@@ -454,7 +581,10 @@ export class TemplateEngine {
       }
       return '';
     }
-    if (fname === '#related' || fname === '#categorytree' || fname === '#dpl' || fname === '#language') {
+    if (fname === '#related' || fname === '#categorytree' || fname === '#dpl' ||
+      fname === '#language' || fname === '#seo' || fname === '#widget' ||
+      fname === '#tag:templatestyles' || fname === '#time') {
+      // 站点 SEO 元数据 / Widget 标记：离线渲染无意义，吞掉（未知函数会保留原文泄漏花括号）
       return '';
     }
     // 未知解析函数：保留原文
@@ -495,12 +625,32 @@ export class TemplateEngine {
         return s.length > 0 ? s.charAt(0).toUpperCase() + s.substring(1) : s;
       }
       case 'URLENCODE': return this.urlEncode(this.get(rest.split('|'), 0));
+      // URL 构造类（离线无站点基址）：'#' 保持 [{{fullurl:…}} label] 外链形态可渲染、点击无操作
+      case 'FULLURL': case 'FULLURLE': case 'LOCALURL': case 'LOCALURLE': case 'URL':
+        return '#';
       case 'NS': {
-        const idx = parseInt(this.get(rest.split('|'), 0));
-        if (!isNaN(idx) && idx === 0) {
-          return '';
+        // {{ns:<id 或名>}} → 命名空间规范名（{{ns:User}}→'User'）；主 ns 返回 ''。
+        //  未知名原样返回（不返回空——否则 #switch 键展开后与主ns空 NAMESPACE 相等，
+        //  会错命中空分支使整个 #default 内容塌缩，如 Infobox villager 的 ns:User talk）
+        const arg = this.get(rest.split('|'), 0).trim();
+        const byId: Record<string, string> = {
+          '0': '', '-2': 'Media', '-1': 'Special', '2': 'User', '3': 'User talk',
+          '4': 'Project', '6': 'File', '8': 'MediaWiki', '10': 'Template',
+          '12': 'Help', '14': 'Category', '828': 'Module'
+        };
+        const byName: Record<string, string> = {
+          'user': 'User', '用户': 'User', 'user talk': 'User talk', '用户讨论': 'User talk',
+          'file': 'File', '文件': 'File', 'file talk': 'File talk',
+          'image': 'File', 'template': 'Template', '模板': 'Template',
+          'template talk': 'Template talk', 'help': 'Help', '帮助': 'Help',
+          'category': 'Category', '分类': 'Category', 'module': 'Module', '模块': 'Module',
+          'project': 'Project', 'media': 'Media', 'special': 'Special'
+        };
+        if (byId[arg] !== undefined) {
+          return byId[arg];
         }
-        return '';
+        const canon = byName[arg.toLowerCase()];
+        return canon !== undefined ? canon : arg;
       }
       default:
         // CURRENT*/LOCAL* 等时间相关 → 空
@@ -694,22 +844,76 @@ export class TemplateEngine {
     return out;
   }
 
-  /** 极简算术表达式求值（+ - * / % 与括号、一元负号） */
+  /** 算术表达式求值（MediaWiki #expr 子集：比较/加减乘除 mod div/round/floor/ceil/trunc/abs、
+   *  括号、一元正负、科学计数法）。优先级：比较 < round < 加减 < 乘除 < 一元 < 函数/数字 */
   private evalExpr(expr: string): string {
-    const s = expr.replace(/\s/g, '');
-    if (s.length === 0) {
+    const v = this.evalExprValue(expr.replace(/\s+/g, ''));
+    if (isNaN(v)) {
       return '';
+    }
+    const rounded = Math.round(v * 1e9) / 1e9;
+    return String(rounded);
+  }
+
+  /** 数值形态求值（失败返回 NaN，供 #ifexpr 真值判断） */
+  private evalExprValue(s: string): number {
+    if (s.length === 0) {
+      return NaN;
     }
     const pos: number[] = [0];
-    const result = this.parseExprAdd(s, pos);
+    const result = this.parseExprCompare(s, pos);
     if (pos[0] < s.length || isNaN(result)) {
-      return '';
+      return NaN;
     }
-    const rounded = Math.round(result * 1e9) / 1e9;
-    if (Number.isInteger(rounded)) {
-      return String(rounded);
+    return result;
+  }
+
+  /** PHP round 语义（.5 远离零），n 可为负 */
+  private phpRound(v: number, n: number): number {
+    const m = Math.pow(10, n);
+    const scaled = Math.abs(v) * m;
+    const r = Math.round(scaled);
+    return (v < 0 ? -r : r) / m;
+  }
+
+  private parseExprCompare(s: string, pos: number[]): number {
+    let v = this.parseExprRound(s, pos);
+    while (pos[0] < s.length) {
+      let op = '';
+      const two = s.substring(pos[0], pos[0] + 2);
+      if (two === '<=' || two === '>=' || two === '==' || two === '<>' || two === '!=') {
+        op = two;
+        pos[0] += 2;
+      } else {
+        const one = s.charAt(pos[0]);
+        if (one === '<' || one === '>' || one === '=') {
+          op = one;
+          pos[0] += 1;
+        } else {
+          break;
+        }
+      }
+      const rhs = this.parseExprRound(s, pos);
+      switch (op) {
+        case '<': v = v < rhs ? 1 : 0; break;
+        case '>': v = v > rhs ? 1 : 0; break;
+        case '<=': v = v <= rhs ? 1 : 0; break;
+        case '>=': v = v >= rhs ? 1 : 0; break;
+        default: v = v === rhs ? 1 : 0; break; // = == <> !=
+      }
     }
-    return String(rounded);
+    return v;
+  }
+
+  /** round 层：加法结果 <round n>（n 为要保留的小数位数，可为负） */
+  private parseExprRound(s: string, pos: number[]): number {
+    let v = this.parseExprAdd(s, pos);
+    while (s.startsWith('round', pos[0])) {
+      pos[0] += 5;
+      const n = this.parseExprAdd(s, pos);
+      v = this.phpRound(v, n);
+    }
+    return v;
   }
 
   private parseExprAdd(s: string, pos: number[]): number {
@@ -744,6 +948,14 @@ export class TemplateEngine {
         pos[0]++;
         const d = this.parseExprUnary(s, pos);
         v = d === 0 ? 0 : v % d;
+      } else if (s.startsWith('mod', pos[0])) {
+        pos[0] += 3;
+        const d = this.parseExprUnary(s, pos);
+        v = d === 0 ? 0 : v % d;
+      } else if (s.startsWith('div', pos[0])) {
+        pos[0] += 3;
+        const d = this.parseExprUnary(s, pos);
+        v = d === 0 ? 0 : Math.trunc(v / d);
       } else {
         break;
       }
@@ -760,18 +972,48 @@ export class TemplateEngine {
       pos[0]++;
       return this.parseExprUnary(s, pos);
     }
+    // 函数前缀：floor( ceil( trunc( abs( round(
+    const fn = s.substring(pos[0], pos[0] + 6).match(/^(floor|ceil|trunc|abs|round)\(/);
+    if (fn !== null) {
+      const name = fn[1];
+      pos[0] += name.length + 1;
+      const v = this.parseExprCompare(s, pos);
+      if (pos[0] < s.length && s.charAt(pos[0]) === ')') {
+        pos[0]++;
+      }
+      switch (name) {
+        case 'floor': return Math.floor(v);
+        case 'ceil': return Math.ceil(v);
+        case 'trunc': return Math.trunc(v);
+        case 'abs': return Math.abs(v);
+        default: return this.phpRound(v, 0); // round(x) 等价 round(x, 0)
+      }
+    }
     if (pos[0] < s.length && s.charAt(pos[0]) === '(') {
       pos[0]++;
-      const v = this.parseExprAdd(s, pos);
+      const v = this.parseExprCompare(s, pos);
       if (pos[0] < s.length && s.charAt(pos[0]) === ')') {
         pos[0]++;
       }
       return v;
     }
-    // 数字
+    // 数字（含科学计数法）
     let j = pos[0];
     while (j < s.length && (s.charAt(j) >= '0' && s.charAt(j) <= '9' || s.charAt(j) === '.')) {
       j++;
+    }
+    if (j > pos[0] && j < s.length && (s.charAt(j) === 'e' || s.charAt(j) === 'E')) {
+      let k = j + 1;
+      if (k < s.length && (s.charAt(k) === '+' || s.charAt(k) === '-')) {
+        k++;
+      }
+      const d0 = k;
+      while (k < s.length && s.charAt(k) >= '0' && s.charAt(k) <= '9') {
+        k++;
+      }
+      if (k > d0) {
+        j = k;
+      }
     }
     if (j === pos[0]) {
       pos[0] = s.length;
@@ -780,6 +1022,71 @@ export class TemplateEngine {
     const num = parseFloat(s.substring(pos[0], j));
     pos[0] = j;
     return num;
+  }
+
+  /** 页面转录（{{:Page}} 全页 / {{#lst:页|标签}} / {{#lsth:页|标题}}）：
+   *  - 循环防护：stack key 统一为 ':'+规范标题（不带标签后缀，防 #lst/#lsth 互引绕过）
+   *  - 深度：转录本身不耗 depth（留给段内模板嵌套，防 页→模板→#lst→段内模板 提前触顶）
+   *  - 热门被转录页走 WikiIndex pageCache */
+  private async transcludePage(rawTitle: string, depth: number, stack: string[],
+    label: string | undefined, byHeading: boolean): Promise<string> {
+    if (this.ctx.index === null || rawTitle.length === 0) {
+      return '';
+    }
+    const title = this.ctx.index.resolveLink(rawTitle, this.ctx.pageTitle);
+    if (title === null) {
+      return '';
+    }
+    const key = ':' + title;
+    if (stack.indexOf(key) >= 0) {
+      return '';
+    }
+    const source = await this.ctx.index.readPageCached(title);
+    if (source === null) {
+      return '';
+    }
+    let cleaned = this.cleanSource(source);
+    let seg = cleaned;
+    if (byHeading) {
+      // #lsth:页|标题 —— 从匹配标题行到下一个同级/更高级标题前（不含标题行）
+      const escaped = label !== undefined ? label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : '';
+      if (escaped.length === 0) {
+        return '';
+      }
+      const hm = cleaned.match(new RegExp('^([={2,6})\\s*' + escaped + '\\s*\\1\\s*$', 'm'));
+      if (hm === null || hm.index === undefined) {
+        return '';
+      }
+      const level = hm[1].length;
+      const bodyStart = hm.index + hm[0].length;
+      const nextM = cleaned.substring(bodyStart)
+        .match(new RegExp('^([={2,' + level + '})[^=]', 'm'));
+      const bodyEnd = nextM !== null && nextM.index !== undefined
+        ? bodyStart + nextM.index : cleaned.length;
+      seg = cleaned.substring(bodyStart, bodyEnd);
+    } else if (label !== undefined) {
+      // #lst:页|标签 —— <section begin="标签"/> 到对应 end 标记；同名多段全部拼接
+      const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const beginRe = new RegExp('<section\\s+begin\\s*=\\s*(?:"' + escaped + '"|\'' + escaped +
+        '\'|' + escaped + ')\\s*/\\s*>', 'gi');
+      const endRe = new RegExp('<section\\s+end\\s*=\\s*(?:"' + escaped + '"|\'' + escaped +
+        '\'|' + escaped + ')\\s*/\\s*>', 'gi');
+      const parts: string[] = [];
+      let bm: RegExpExecArray | null;
+      while ((bm = beginRe.exec(cleaned)) !== null) {
+        endRe.lastIndex = bm.index + bm[0].length;
+        const em = endRe.exec(cleaned);
+        const segEnd = em !== null ? em.index : cleaned.length;
+        parts.push(cleaned.substring(bm.index + bm[0].length, segEnd));
+        if (em === null) {
+          break;
+        }
+      }
+      seg = parts.join('\n');
+    }
+    // 残留 section 标记剥离（转录内容不应泄漏标记）
+    seg = seg.replace(/<section\s+(?:begin|end)\s*=[^>]*\/?>/gi, '');
+    return await this.expandInner(seg, depth, stack.concat(key), false);
   }
 
   /** 模板源码清理：注释、noinclude 移除、includeonly 标签剥离（内容保留）。

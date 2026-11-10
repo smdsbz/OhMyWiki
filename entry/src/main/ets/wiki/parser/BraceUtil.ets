@@ -9,6 +9,15 @@ export class BraceUtil {
    * @returns '}}' 之后的下标；未找到返回 -1
    */
   static findTemplateClose(text: string, openIdx: number): number {
+    // 起始即三花括号（{{{X}}} 参数 / {{{X}} 2 闭形态）：
+    //  - 真参数块：整块吞掉（与下方循环内遇嵌套三括号一致）
+    //  - 2 闭形态：返回 -1，调用方逐字符降级（首 '{' 字面量 + {{X}} 正常配平），
+    //    避免把 {{{X}} 误锚成模板 {{ {!}} }} 导致整块蒸发
+    if (text.charCodeAt(openIdx) === 123 && text.charCodeAt(openIdx + 1) === 123 &&
+      text.charCodeAt(openIdx + 2) === 123) {
+      const tend = BraceUtil.skipTripleBrace(text, openIdx);
+      return tend;
+    }
     let i = openIdx + 2;
     let depth = 1;
     const n = text.length;
@@ -16,11 +25,16 @@ export class BraceUtil {
       // 参数块 {{{...}}}
       if (text.charCodeAt(i) === 123 && text.charCodeAt(i + 1) === 123 && text.charCodeAt(i + 2) === 123) {
         const end = BraceUtil.skipTripleBrace(text, i);
-        if (end < 0) {
-          return -1;
+        if (end > 0) {
+          i = end;
+          continue;
         }
-        i = end;
-        continue;
+        if (end < 0) {
+          // 2 闭形态 {{{X}}（MediaWiki 括号栈语义 = '{' + {{X}}）：吃掉首 '{' 字面量，
+          // 余下 {{X}} 交给下方普通深度配平——不能作 -1 上抛，否则含此构造的外层调用整体炸掉
+          i++;
+          continue;
+        }
       }
       // 链接块 [[...]]
       if (text.charCodeAt(i) === 91 && text.charCodeAt(i + 1) === 91) {
@@ -72,6 +86,30 @@ export class BraceUtil {
         depth++;
         i += 3;
         continue;
+      }
+      // 默认值内嵌套的 {{模板}} / [[链接]]：整块跳过，防止其闭合括号被误当参数块的 }}}
+      // （如 {{{1|{{FULLPAGENAME}}}}} 曾被截在首个 }}}，残留 }} 使后续配平全盘错位）
+      if (text.charCodeAt(i) === 123 && text.charCodeAt(i + 1) === 123) {
+        const e = BraceUtil.findTemplateClose(text, i);
+        if (e < 0) {
+          return -1;
+        }
+        i = e;
+        continue;
+      }
+      if (text.charCodeAt(i) === 91 && text.charCodeAt(i + 1) === 91) {
+        const e = BraceUtil.findBracketClose(text, i);
+        if (e < 0) {
+          return -1;
+        }
+        i = e;
+        continue;
+      }
+      // 2 闭形态 {{{X}}：depth 1 时遇到孤立 }}（后一字符非 }）= 块以 {{X}} 收尾、
+      // 首个 { 为字面量 —— 返回 -1 让调用方走降级路径（不能吞到远处别的参数的 }}}）
+      if (text.charCodeAt(i) === 125 && text.charCodeAt(i + 1) === 125 &&
+        text.charCodeAt(i + 2) !== 125 && depth === 1) {
+        return -1;
       }
       if (text.charCodeAt(i) === 125 && text.charCodeAt(i + 1) === 125 && text.charCodeAt(i + 2) === 125) {
         depth--;

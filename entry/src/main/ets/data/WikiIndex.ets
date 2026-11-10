@@ -4,6 +4,15 @@ import { WikiSite } from '../model/WikiTypes';
 
 const TAG = 'WikiIndex';
 
+/** 命名空间本地名 ↔ 规范名（MediaWiki 标准别名，站点无关） */
+const NS_ALIAS: Record<string, string> = {
+  '模板': 'Template', 'Template': '模板',
+  '模块': 'Module', 'Module': '模块',
+  '分类': 'Category', 'Category': '分类',
+  '文件': 'File', 'File': '文件',
+  '帮助': 'Help', 'Help': '帮助',
+};
+
 /** manifest.json 条目 */
 interface ManifestEntry {
   title: string;
@@ -17,6 +26,7 @@ interface ManifestEntry {
 interface SummaryEntry {
   site?: string;
   total_pages?: number;
+  home_title?: string;
 }
 
 /**
@@ -148,6 +158,7 @@ export class WikiIndex {
       candidates.push(cached);
     } else {
       // 候选：① 原名 ② 冒号/空格/斜杠→下划线（MediaWiki 存储形态）③①② 的首字母大小写互换
+      // ④ Windows 非法字符→下划线（转储文件名清洗形态，如 '??Foroguemon??.png'）
       const under = base.replace(/[:\s/]+/g, '_');
       const first = under.charAt(0);
       const swapped = first >= 'a' && first <= 'z'
@@ -156,6 +167,10 @@ export class WikiIndex {
       candidates.push(base);
       if (under !== base) {
         candidates.push(under);
+      }
+      const legal = under.replace(/[<>:"\\|?*]/g, '_');
+      if (legal !== under && candidates.indexOf(legal) < 0) {
+        candidates.push(legal);
       }
       if (swapped.length > 0 && swapped !== base && swapped !== under) {
         candidates.push(swapped);
@@ -303,13 +318,37 @@ export class WikiIndex {
     }
   }
 
-  /** 读取模板页源码（模板命名空间，带缓存） */
+  /** readPage 的缓存版（#lst 转录等高频取源场景；FIFO 上限 64 页） */
+  private pageCache: Map<string, string | null> = new Map();
+  private pageCacheOrder: string[] = [];
+
+  async readPageCached(title: string): Promise<string | null> {
+    if (this.pageCache.has(title)) {
+      return this.pageCache.get(title) ?? null;
+    }
+    const text = await this.readPage(title);
+    this.pageCache.set(title, text);
+    this.pageCacheOrder.push(title);
+    while (this.pageCacheOrder.length > 64) {
+      const evict = this.pageCacheOrder.shift();
+      if (evict !== undefined) {
+        this.pageCache.delete(evict);
+      }
+    }
+    return text;
+  }
+
+  /** 读取模板页源码（模板命名空间，带缓存）。
+   *  MediaWiki 命名空间本地名与规范名双别名（rakuen 用「模板:」，英文 wiki 用 Template:） */
   async readTemplate(name: string): Promise<string | null> {
     const cached = this.templateCache.get(name);
     if (cached !== undefined) {
       return cached;
     }
-    const text = await this.readPage('模板:' + name);
+    let text = await this.readPage('模板:' + name);
+    if (text === null) {
+      text = await this.readPage('Template:' + name);
+    }
     this.templateCache.set(name, text);
     return text;
   }
@@ -360,9 +399,20 @@ export class WikiIndex {
       const full = parent.length > 0 ? parent + '/' + rest : rest;
       return this.pageExists(full) ? full : null;
     }
-    // 带命名空间前缀
+    // 带命名空间前缀（本地名/规范名双别名：模板↔Template 等标准 MediaWiki 别名）
     if (target.indexOf(':') >= 0) {
-      return this.pageExists(target) ? target : null;
+      if (this.pageExists(target)) {
+        return target;
+      }
+      const ci = target.indexOf(':');
+      const alias = NS_ALIAS[target.substring(0, ci)];
+      if (alias !== undefined) {
+        const swapped = alias + target.substring(ci);
+        if (this.pageExists(swapped)) {
+          return swapped;
+        }
+      }
+      return null;
     }
     // 同命名空间相对
     const ci = currentTitle.indexOf(':');
@@ -398,12 +448,16 @@ export class WikiIndex {
       const summary = await idx.readSummary();
       let displayName = dirName;
       let totalPages = 0;
+      let homeTitle = '首页';
       if (summary !== null) {
         if (summary.site !== undefined && summary.site.length > 0) {
           displayName = summary.site;
         }
         if (summary.total_pages !== undefined) {
           totalPages = summary.total_pages;
+        }
+        if (summary.home_title !== undefined && summary.home_title.length > 0) {
+          homeTitle = summary.home_title;
         }
       }
       const site: WikiSite = {
@@ -412,7 +466,7 @@ export class WikiIndex {
         sourceKey: source.key,
         rootRel: rootRel,
         totalPages: totalPages,
-        homeTitle: '首页',
+        homeTitle: homeTitle,
       };
       return site;
     } catch (e) {

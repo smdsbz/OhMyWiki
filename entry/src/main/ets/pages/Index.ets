@@ -148,7 +148,7 @@ struct Index {
     const params: ReaderParams = {
       siteKey: item.site.sourceKey,
       siteName: item.site.name,
-      title: startTitle,
+      title: startTitle ?? item.site.homeTitle,
     };
     this.pathStack.pushPathByName('Reader', params);
   }

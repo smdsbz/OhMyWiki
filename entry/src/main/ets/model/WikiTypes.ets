@@ -57,6 +57,20 @@ export enum NodeType {
   /** 敌人地图位置（底图 + 标记点） */
   /** 通用地图节点（模块输出 @@WIKIMAP 协议行） */
   Map = 'map',
+  /** Cite 脚注引用标记（正文中的 <ref> 上标序号） */
+  RefMark = 'refmark',
+  /** Cite 参考文献列表（<references> 块） */
+  ReferencesBlock = 'references',
+}
+
+/** Cite 脚注条目（RefCollector 收集，ReferencesBlock 渲染） */
+export interface RefEntry {
+  /** 脚注名（<ref name="x">）；匿名脚注为 null */
+  name: string | null;
+  /** 内容（已解析为行内节点） */
+  inline: WikiNode[];
+  /** 登记序号（首现顺序，1 起） */
+  seq: number;
 }
 
 /** 地图标记点（相对底图的百分比坐标） */
@@ -138,6 +152,20 @@ export interface WikiNode {
   mapMarkers?: MapMarker[];
   /** HTML div 的 class 透传（如 card/quest-collapse，渲染期查适配器样式表解释） */
   htmlClass?: string;
+  /** 表格可点击表头排序（class 含 sortable） */
+  sortable?: boolean;
+  /** 单元格排序键（data-sort-value；缺省用单元格文本） */
+  sortValue?: string;
+  /** 上标/下标近似（<sup>/<sub>：字号缩放，ArkUI Span 无基线偏移） */
+  scriptPos?: 'sup' | 'sub';
+  /** 等宽字体（<code>/<samp>） */
+  mono?: boolean;
+  /** RefMark：脚注名（<ref name="x">，与 RefCollector 条目关联） */
+  refName?: string;
+  /** RefMark：脚注登记序号（渲染期显示编号） */
+  refSeq?: number;
+  /** ReferencesBlock：脚注条目列表（<references> 或页尾自动追加） */
+  refEntries?: RefEntry[];
   /** 折叠容器 key（mw-customcollapsible-X 的 X 段） */
   collapsibleId?: string;
   /** 折叠容器初始收起（class 含 mw-collapsed） */

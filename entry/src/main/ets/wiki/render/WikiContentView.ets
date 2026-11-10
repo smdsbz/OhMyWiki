@@ -1,4 +1,4 @@
-import { NodeType, WikiNode, GaugeSeg } from '../../model/WikiTypes';
+import { NodeType, WikiNode, GaugeSeg, RefEntry } from '../../model/WikiTypes';
 import { HtmlBoxStyle } from '../siteadapter/SiteAdapter';
 import { adaptSourceBg, adaptSourceFg } from './SourceColor';
 import { WikiImage } from './WikiImage';
@@ -27,6 +27,12 @@ interface InlineRun {
 interface TableRowPair {
   row: WikiNode;
   ri: number;
+}
+
+/** sortable 表格排序态：列（colIndex）+ 方向（1 升序 / -1 降序） */
+interface TableSortSpec {
+  col: number;
+  dir: number;
 }
 
 /** 渲染项：普通块 / 巨型表拆分后的表头与行 / 首尾安全区留白 / 后台查询进度条（LazyForEach 数据单元） */
@@ -155,6 +161,7 @@ interface RichSpan {
   color: string; // 行内颜色（'' = 默认）
   fontSize?: number; // 行内字号（0/未设 = 默认）
   bgColor?: string; // 行内背景色（'' /未设 = 透明）
+  mono?: boolean; // 等宽字体（<code>/<samp>）
 }
 
 /** 行内渲染段：连续 text/link 合并为一个 rich 段（单个 Text 内多 Span，支持段内自然换行） */
@@ -210,6 +217,8 @@ export struct WikiContentView {
    *  换代 key 强制全量重建 */
   private itemGen: number = 0;
   @State tableFilters: Map<string, string> = new Map();
+  /** sortable 表格排序态（key: 表key → 列 colIndex + 方向） */
+  @State tableSorts: Map<string, TableSortSpec> = new Map();
   /** 宽表冻结列行高同步表（key: 表key_行号 → 滚动区实测行高 vp） */
   @State wideRowH: Map<string, number> = new Map();
   /** 折叠容器展开状态（key: collapsibleId；缺省值由节点 collapsed 字段决定，rebuild 时播种） */
@@ -241,10 +250,13 @@ export struct WikiContentView {
     }
   }
 
-  /** 页面切换（renderKey 变化）时清空表格过滤状态与行高同步表并重建渲染项 */
+  /** 页面切换（renderKey 变化）时清空表格过滤/排序状态与行高同步表并重建渲染项 */
   onRenderKeyChange(): void {
     if (this.tableFilters.size > 0) {
       this.tableFilters = new Map();
+    }
+    if (this.tableSorts.size > 0) {
+      this.tableSorts = new Map();
     }
     if (this.wideRowH.size > 0) {
       this.wideRowH = new Map();
@@ -443,7 +455,7 @@ export struct WikiContentView {
     return !this.hasRowSpan(node) && this.wideTableWidthVp(node) === 0;
   }
 
-  /** 拆分表的可见行（行 0 是表头，常驻 thead；其余按关键词过滤） */
+  /** 拆分表的可见行（行 0 是表头，常驻 thead；其余按关键词过滤，sortable 时排序） */
   private splitVisibleRows(node: WikiNode, tKey: string): TableRowPair[] {
     const allRows = (node.children ?? []) as WikiNode[];
     const out: TableRowPair[] = [];
@@ -452,7 +464,7 @@ export struct WikiContentView {
       for (let i = 1; i < allRows.length; i++) {
         out.push({ row: allRows[i], ri: i });
       }
-      return out;
+      return this.sortRowPairs(out, node, tKey);
     }
     const terms = kw.split(/\s+/).filter((s: string) => s.length > 0);
     for (let i = 1; i < allRows.length; i++) {
@@ -460,7 +472,7 @@ export struct WikiContentView {
         out.push({ row: allRows[i], ri: i });
       }
     }
-    return out;
+    return this.sortRowPairs(out, node, tKey);
   }
 
   /** nodes → 渲染项列表（首尾安全区留白 + 查询进度条 + 块级 + 巨型表拆行），整体 reload */
@@ -555,7 +567,7 @@ export struct WikiContentView {
       // 行 0 = 表头行
       if (((node.children ?? []) as WikiNode[]).length > 0) {
         Column() {
-          this.renderTableRow(node, ((node.children ?? []) as WikiNode[])[0])
+          this.renderTableRow(node, ((node.children ?? []) as WikiNode[])[0], 'sp' + ti)
         }
         .width('100%')
         .border({
@@ -589,19 +601,39 @@ export struct WikiContentView {
     .margin({ bottom: last ? 8 : 0 })
   }
 
-  /** 普通表行渲染（整表路径与拆分行路径共用；列宽按表头声明比例） */
+  /** 普通表行渲染（整表路径与拆分行路径共用；列宽按表头声明比例）。
+   *  tKey 提供时：sortable 表头格可点击排序并显示方向指示 */
   @Builder
-  renderTableRow(node: WikiNode, row: WikiNode) {
+  renderTableRow(node: WikiNode, row: WikiNode, tKey?: string) {
     Flex({ direction: FlexDirection.Row, alignItems: ItemAlign.Stretch }) {
       ForEach(row.children ?? [], (cell: WikiNode, cIdx: number) => {
         Column() {
           this.renderInlineFlow(cell.inline ?? [], '')
+          // 单元格级块级子节点（嵌套 wikitext 表等）
+          if (cell.children !== undefined && (cell.children as WikiNode[]).length > 0) {
+            ForEach(cell.children as WikiNode[], (sub: WikiNode, sIdx: number) => {
+              this.renderBlock(sub, 'sub' + (cell.colIndex ?? 0) + '_' + sIdx)
+            }, (sub: WikiNode, sIdx: number) => 'sub' + (cell.colIndex ?? 0) + '_' + sIdx)
+          }
+          if (tKey !== undefined && tKey.length > 0 && node.sortable === true &&
+            cell.type === NodeType.TableHeaderCell) {
+            Text(this.sortIndicator(tKey, cell.colIndex ?? 0))
+              .fontSize(9)
+              .fontColor($r('sys.color.brand'))
+              .padding({ top: 1 })
+          }
         }
         .layoutWeight(this.colWeight(node, cell))
         .padding(6)
         .backgroundColor(this.cellBg(cell))
         .border({ width: 1, color: $r('app.color.table_border') })
         .alignItems(HorizontalAlign.Start)
+        .onClick(() => {
+          if (tKey !== undefined && tKey.length > 0 && node.sortable === true &&
+            cell.type === NodeType.TableHeaderCell) {
+            this.toggleTableSort(tKey, cell.colIndex ?? 0);
+          }
+        })
       }, (cell: WikiNode, cIdx: number) => 'cell' + (cell.colIndex ?? 0))
     }
     .width('100%')
@@ -611,6 +643,101 @@ export struct WikiContentView {
         this.toggleCollapse(row.toggleFor as string);
       }
     })
+  }
+
+  // ---------- 表格排序（sortable） ----------
+
+  /** 排序是否可用：sortable 且无 rowspan（跨行单元格无法按行独立排序） */
+  private tableSortable(node: WikiNode): boolean {
+    return node.sortable === true && !this.hasRowSpan(node);
+  }
+
+  private toggleTableSort(tKey: string, col: number): void {
+    const cur = this.tableSorts.get(tKey);
+    const m = new Map(this.tableSorts);
+    if (cur === undefined) {
+      m.set(tKey, { col: col, dir: 1 });
+    } else if (cur.col !== col) {
+      m.set(tKey, { col: col, dir: 1 });
+    } else if (cur.dir === 1) {
+      m.set(tKey, { col: col, dir: -1 });
+    } else {
+      m.delete(tKey); // 第三次点击恢复原序
+    }
+    this.tableSorts = m;
+    if (tKey.startsWith('sp')) {
+      this.refreshSplitRows(parseInt(tKey.substring(2), 10));
+    }
+  }
+
+  private sortIndicator(tKey: string, col: number): string {
+    const cur = this.tableSorts.get(tKey);
+    if (cur === undefined || cur.col !== col) {
+      return '⇅';
+    }
+    return cur.dir === 1 ? '▲' : '▼';
+  }
+
+  /** 行排序键：data-sort-value 优先，否则单元格文本 */
+  private sortKeyValue(row: WikiNode, col: number): string {
+    const cells = (row.children ?? []) as WikiNode[];
+    let cell: WikiNode | undefined;
+    for (const c of cells) {
+      if ((c.colIndex ?? 0) === col) {
+        cell = c;
+        break;
+      }
+    }
+    if (cell === undefined) {
+      return '';
+    }
+    if (cell.sortValue !== undefined && cell.sortValue.length > 0) {
+      return cell.sortValue;
+    }
+    const sb: string[] = [];
+    this.collectNodeText(cell, sb);
+    return sb.join(' ').trim();
+  }
+
+  /** 数值感知比较：两侧都以前导数字开头则按数值，否则按字符串序 */
+  private compareSortKeys(a: string, b: string): number {
+    const re = /^[+-]?[\d.,]+/;
+    const ma = a.match(re);
+    const mb = b.match(re);
+    if (ma !== null && mb !== null) {
+      const va = parseFloat(ma[0].replace(/,/g, ''));
+      const vb = parseFloat(mb[0].replace(/,/g, ''));
+      if (!isNaN(va) && !isNaN(vb) && ma[0].length > 0 && mb[0].length > 0) {
+        if (va < vb) {
+          return -1;
+        }
+        if (va > vb) {
+          return 1;
+        }
+      }
+    }
+    if (a < b) {
+      return -1;
+    }
+    if (a > b) {
+      return 1;
+    }
+    return 0;
+  }
+
+  /** 行对排序（稳定，tie-break 原行号）；无排序态原样返回 */
+  private sortRowPairs(pairs: TableRowPair[], node: WikiNode, tKey: string): TableRowPair[] {
+    const spec = this.tableSorts.get(tKey);
+    if (spec === undefined || !this.tableSortable(node)) {
+      return pairs;
+    }
+    const body = pairs.slice();
+    body.sort((x: TableRowPair, y: TableRowPair): number => {
+      const c = this.compareSortKeys(this.sortKeyValue(x.row, spec.col),
+        this.sortKeyValue(y.row, spec.col)) * spec.dir;
+      return c !== 0 ? c : x.ri - y.ri;
+    });
+    return body;
   }
 
   // ---------- 表格搜索过滤 ----------
@@ -686,7 +813,7 @@ export struct WikiContentView {
     return rows.length >= TABLE_FILTER_MIN_ROWS && !this.hasRowSpan(node);
   }
 
-  /** 过滤后的行列表（首行表头始终保留） */
+  /** 过滤后的行列表（首行表头始终保留；sortable 时表体行按排序态排序） */
   private visibleRows(node: WikiNode, tKey: string): TableRowPair[] {
     const allRows = (node.children ?? []) as WikiNode[];
     const out: TableRowPair[] = [];
@@ -700,7 +827,7 @@ export struct WikiContentView {
           out.push({ row: allRows[i], ri: i });
         }
       }
-      return out;
+      return this.sortRowPairsKeepHeader(out, node, tKey);
     }
     const terms = kw.split(/\s+/).filter((s: string) => s.length > 0);
     for (let i = 0; i < allRows.length; i++) {
@@ -710,6 +837,21 @@ export struct WikiContentView {
       if (i === 0 || this.rowMatches(allRows[i], terms)) {
         out.push({ row: allRows[i], ri: i });
       }
+    }
+    return this.sortRowPairsKeepHeader(out, node, tKey);
+  }
+
+  /** 表头行（ri=0）保持在首位，其余行排序 */
+  private sortRowPairsKeepHeader(pairs: TableRowPair[], node: WikiNode,
+    tKey: string): TableRowPair[] {
+    if (pairs.length < 2 || pairs[0].ri !== 0) {
+      return this.sortRowPairs(pairs, node, tKey);
+    }
+    const header = pairs[0];
+    const body = this.sortRowPairs(pairs.slice(1), node, tKey);
+    const out: TableRowPair[] = [header];
+    for (const p of body) {
+      out.push(p);
     }
     return out;
   }
@@ -807,6 +949,14 @@ export struct WikiContentView {
           height: tok.fileHeight,
           align: tok.fileAlign,
           style: style,
+        });
+      } else if (t === NodeType.RefMark) {
+        // Cite 脚注引用：品牌色小字号 [n]（并入当前 rich 段，随文字换行）
+        current.push({
+          type: NodeType.Color,
+          color: '#007DFF',
+          fontSize: 10,
+          inline: [{ type: NodeType.Text, text: '[' + (tok.refSeq ?? 0) + ']' }],
         });
       } else if (t === NodeType.Placeholder) {
         flush();
@@ -916,6 +1066,30 @@ export struct WikiContentView {
         .margin({ top: 4, bottom: 4 })
     } else if (node.type === NodeType.Placeholder) {
       this.renderPlaceholder(node)
+    } else if (node.type === NodeType.ReferencesBlock) {
+      // Cite 参考文献列表：小字号编号列表
+      Column({ space: 5 }) {
+        Text('参考')
+          .fontSize(13)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_secondary'))
+          .margin({ top: 10, bottom: 2 })
+        ForEach(node.refEntries ?? [], (e: RefEntry, idx: number) => {
+          Row({ space: 6 }) {
+            Text('[' + e.seq + ']')
+              .fontSize(11)
+              .fontColor($r('app.color.link'))
+            Column() {
+              this.renderInlineFlow(e.inline, '')
+            }
+            .layoutWeight(1)
+          }
+          .width('100%')
+          .alignItems(VerticalAlign.Top)
+        }, (e: RefEntry, idx: number) => 'ref' + idx + '_' + e.seq)
+      }
+      .width('100%')
+      .padding({ top: 6, bottom: 6 })
     } else if (node.type === NodeType.Container) {
       if (node.collapsibleId !== undefined && !this.collapsibleOpen(node)) {
         // 收起态（mw-collapsed）：内容整体隐藏，与原站 display:none 一致
@@ -1106,7 +1280,7 @@ export struct WikiContentView {
       } else {
         Column() {
           ForEach(this.visibleRows(node, tKey), (item: TableRowPair, vIdx: number) => {
-            this.renderTableRow(node, item.row)
+            this.renderTableRow(node, item.row, tKey)
           }, (item: TableRowPair, vIdx: number) => 'frow_' + item.ri)
         }
         .border({ width: 1, color: $r('app.color.table_border_outer') })
@@ -1653,10 +1827,17 @@ export struct WikiContentView {
           cs |= 2;
         }
         const cc = t === NodeType.Color && tok.color !== undefined ? tok.color : color;
-        const csize = t === NodeType.Color && tok.fontSize !== undefined ? tok.fontSize : fontSize;
+        let csize = t === NodeType.Color && tok.fontSize !== undefined ? tok.fontSize : fontSize;
+        if (t === NodeType.Color && tok.scriptPos !== undefined && csize <= 0) {
+          // 上下标近似：字号缩到 ~0.62×（ArkUI Span 无基线偏移）
+          csize = 10;
+        }
         const cbg = t === NodeType.Color && tok.bgColor !== undefined ? tok.bgColor : bg;
         const sub = this.flattenRich(tok.inline ?? [], cs, link, target, cc, csize, cbg);
         for (const s of sub) {
+          if (tok.mono === true && s.mono !== true) {
+            s.mono = true;
+          }
           out.push(s);
         }
       } else if (t === NodeType.Link) {
@@ -1801,6 +1982,7 @@ export struct WikiContentView {
           .fontColor(sp.color.length > 0 ? adaptSourceFg(sp.color, this.isDark) :
             (sp.link ? $r('app.color.link') : $r('app.color.text_body')))
           .fontSize((sp.fontSize ?? 0) > 0 ? sp.fontSize : 15)
+          .fontFamily(sp.mono === true ? 'monospace' : '')
           .textBackgroundStyle(sp.bgColor !== undefined && sp.bgColor.length > 0
             ? { color: adaptSourceBg(sp.bgColor, this.isDark), radius: 2 }
             : { color: Color.Transparent, radius: 0 })
@@ -1820,6 +2002,7 @@ export struct WikiContentView {
           .fontColor(sp.color.length > 0 ? adaptSourceFg(sp.color, this.isDark) :
             (sp.link ? $r('app.color.link') : $r('app.color.text_body')))
           .fontSize((sp.fontSize ?? 0) > 0 ? sp.fontSize : 15)
+          .fontFamily(sp.mono === true ? 'monospace' : '')
           .textBackgroundStyle(sp.bgColor !== undefined && sp.bgColor.length > 0
             ? { color: adaptSourceBg(sp.bgColor, this.isDark), radius: 2 }
             : { color: Color.Transparent, radius: 0 })
